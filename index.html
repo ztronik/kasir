@@ -431,7 +431,7 @@
             return Math.max(0, price - (item.discount || 0));
         }
 
-        // --- FETCH DATA — JSONP (tidak kena blokir CORS) ---
+        // --- FETCH DATA — fetch() dengan fallback JSONP ---
         function fetchData() {
             if (!GAS_URL) return;
             state.isLoading = true;
@@ -440,6 +440,45 @@
             if (icon) icon.classList.add('animate-spin');
             renderContent();
 
+            var fetchUrl = GAS_URL + '?t=' + Date.now();
+            fetch(fetchUrl, {
+                method: 'GET',
+                redirect: 'follow',
+                cache: 'no-store',
+                headers: { 'Accept': 'application/json, text/javascript, */*' }
+            })
+                .then(function(res) {
+                    // Cek apakah di-redirect ke Google login (artinya GAS belum public)
+                    if (res.url && res.url.indexOf('accounts.google.com') >= 0) {
+                        throw new Error('redirect-google');
+                    }
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    return res.text();
+                })
+                .then(function(text) {
+                    // Cek redirect ke Google login di dalam response body
+                    if (text.indexOf('accounts.google.com') >= 0 || text.indexOf('SignIn') >= 0) {
+                        throw new Error('redirect-google');
+                    }
+                    var data;
+                    try { data = JSON.parse(text); } catch(e) {
+                        // Mungkin JSONP-wrapped (ada callback name di depan)
+                        var m = text.match(/\{[\s\S]*\}/);
+                        if (m) { try { data = JSON.parse(m[0]); } catch(e2) { throw new Error('Parse error'); } }
+                        else throw new Error('Response tidak valid');
+                    }
+                    var ic = document.getElementById('refresh-icon');
+                    if (ic) ic.classList.remove('animate-spin');
+                    applyGasData(data);
+                })
+                .catch(function(err) {
+                    // fetch gagal — fallback ke JSONP
+                    console.log('fetch() gagal (' + err.message + '), fallback ke JSONP');
+                    fetchDataJSONP();
+                });
+        }
+
+        function fetchDataJSONP() {
             // Hapus script lama
             var old = document.getElementById('jsonp-loader');
             if (old) old.remove();
@@ -461,7 +500,26 @@
                 delete window[cbName];
                 var ic = document.getElementById('refresh-icon');
                 if (ic) ic.classList.remove('animate-spin');
+                applyGasData(data);
+            };
 
+            var script = document.createElement('script');
+            script.id = 'jsonp-loader';
+            script.src = GAS_URL + '?callback=' + cbName + '&t=' + Date.now();
+            script.onerror = function() {
+                clearTimeout(timer);
+                delete window[cbName];
+                state.isLoading = false;
+                state.fetchError = 'URL GAS tidak valid atau GAS belum di-deploy. Pastikan URL berakhiran /exec dan Who has access: Anyone.';
+                var ic = document.getElementById('refresh-icon');
+                if (ic) ic.classList.remove('animate-spin');
+                showToast('Gagal — cek URL GAS.', 'error');
+                renderContent();
+            };
+            document.head.appendChild(script);
+        }
+
+        function applyGasData(data) {
                 if (data && data.status === 'success') {
                     if (data.products) {
                         state.products = data.products.map(function(p) { return {
@@ -484,18 +542,9 @@
                             return Object.assign({}, c, { tier: getTierInfo(c.poin).name });
                         });
                     }
-                    // Load login data dari GAS
-                    if (data.adminLogin) {
-                        authAdmin = data.adminLogin;
-                    }
-                    if (data.karyawanList) {
-                        authKaryawan = data.karyawanList;
-                    }
                     if (data.adminLogin)   authAdmin    = data.adminLogin;
                     if (data.karyawanList) authKaryawan = data.karyawanList;
-                    // Sales history dari GAS
                     if (data.salesHistory) state.salesHistory = data.salesHistory;
-                    // Shift dari GAS
                     if (data.shiftAktif) {
                         clerekState.shiftId              = data.shiftAktif.id;
                         clerekState.shiftMulai           = data.shiftAktif.mulai;
@@ -503,7 +552,7 @@
                         clerekState.kasirShift           = data.shiftAktif.kasir || '-';
                         clerekState.kasAwal              = data.shiftAktif.kasAwal;
                         clerekState.kasAwalInput         = data.shiftAktif.kasAwal;
-                        clerekState.kasAwalKonfirmasi    = true;  // sudah dikonfirmasi sebelumnya
+                        clerekState.kasAwalKonfirmasi    = true;
                         clerekState.kasAkhirKonfirmasi   = false;
                     } else {
                         clerekState.shiftId              = null;
@@ -516,14 +565,13 @@
                     if (data.riwayatShift)  clerekState.riwayatShift = data.riwayatShift;
                     if (data.mutasiKas)     clerekMutasiKas          = data.mutasiKas;
                     if (data.catatan)       clerekState.catatanList  = data.catatan;
-                    // QRIS & pengaturan dari GAS
                     if (data.pengaturan) {
                         if (data.pengaturan.qris_image) qrisImageBase64 = data.pengaturan.qris_image;
                         if (data.pengaturan.nama_toko)  namaTokoStruk   = data.pengaturan.nama_toko;
                     }
                     state.isLoading = false;
                     showToast('Data dimuat: ' + state.products.length + ' produk, ' + state.customers.length + ' pelanggan.', 'success');
-                    // Auto-cleanup silent: hapus transaksi > 30 hari di background
+                    // Auto-cleanup silent
                     (function() {
                         var batas = new Date();
                         batas.setDate(batas.getDate() - 30);
@@ -533,11 +581,9 @@
                         if (adaYangLama && GAS_URL) {
                             gasPost({ action: 'bersihkanTransaksiLama', hariMaksimal: 30 }).then(function(res) {
                                 if (res && res.status === 'success' && res.dihapus > 0) {
-                                    // Bersihkan juga dari memori lokal
                                     state.salesHistory = state.salesHistory.filter(function(s) {
                                         return new Date(s.date) >= batas;
                                     });
-                                    console.log('[Auto-Cleanup] ' + res.dihapus + ' transaksi lama dihapus.');
                                 }
                             }).catch(function(){});
                         }
@@ -548,22 +594,6 @@
                     showToast('Error dari GAS: ' + state.fetchError, 'error');
                 }
                 renderContent();
-            };
-
-            var script = document.createElement('script');
-            script.id = 'jsonp-loader';
-            script.src = GAS_URL + '?callback=' + cbName + '&t=' + Date.now();
-            script.onerror = function() {
-                clearTimeout(timer);
-                delete window[cbName];
-                state.isLoading = false;
-                state.fetchError = 'URL GAS tidak valid atau GAS belum di-deploy. Pastikan URL berakhiran /exec dan Who has access: Anyone.';
-                var ic = document.getElementById('refresh-icon');
-                if (ic) ic.classList.remove('animate-spin');
-                showToast('Gagal — cek URL GAS.', 'error');
-                renderContent();
-            };
-            document.head.appendChild(script);
         }
 
         // GAS POST — tetap pakai fetch (POST tidak kena CORS di GAS)
