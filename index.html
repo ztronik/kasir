@@ -250,6 +250,7 @@
             { name: 'Pengaturan',   icon: 'ph-gear' },
             { name: 'Karyawan',     icon: 'ph-user-circle-gear' },
             { name: 'Clerek',       icon: 'ph-user-check' },
+            { name: 'FAQ',          icon: 'ph-question' },
         ];
         // Menu terbatas karyawan
         const MENUS_KARYAWAN = [
@@ -259,6 +260,7 @@
             { name: 'Poin & Reward',icon: 'ph-star' },
             { name: 'Laporan',      icon: 'ph-file-text' },
             { name: 'Clerek',       icon: 'ph-user-check' },
+            { name: 'FAQ',          icon: 'ph-question' },
         ];
         function getMenus() {
             if (!currentUser) return MENUS_ADMIN;
@@ -270,6 +272,8 @@
         var authKaryawan = [];
         var currentUser  = null;
         var adminAmbilAlih = false;  // true = admin ambil alih shift karyawan
+        // Password khusus untuk membatalkan transaksi (bisa diatur di Pengaturan)
+        var cancelRefundPwd = 'batal123';
 
         function doLogin() {
             var uname = (document.getElementById('login-username').value || '').trim();
@@ -573,6 +577,7 @@
                     if (data.pengaturan) {
                         if (data.pengaturan.qris_image) qrisImageBase64 = data.pengaturan.qris_image;
                         if (data.pengaturan.nama_toko)  namaTokoStruk   = data.pengaturan.nama_toko;
+                        if (data.pengaturan.cancel_pwd) cancelRefundPwd = data.pengaturan.cancel_pwd;
                     }
                     state.isLoading = false;
                     showToast('Data dimuat: ' + state.products.length + ' produk, ' + state.customers.length + ' pelanggan.', 'success');
@@ -1038,6 +1043,10 @@
                     break;
                 case 'Clerek':
                     contentArea.innerHTML = getClerekHTML();
+                    break;
+                case 'FAQ':
+                    _faqPage = 0;
+                    contentArea.innerHTML = getFaqHTML();
                     break;
                 default:
                     contentArea.innerHTML = getPlaceholderHTML(state.activeMenu);
@@ -1624,7 +1633,7 @@
         }
 
         function buildStruHtml(opts) {
-            // opts: { namaT, alamatT, telp, noTrx, tgl, jam, memberName, memberId, itemsHtml, subtotal, disc, poinDisc, poinRedeem, grandTotal, method, received, change, footer }
+            // opts: { namaT, alamatT, telp, kasir, noTrx, tgl, jam, memberName, memberId, itemsHtml, subtotal, disc, poinDisc, poinRedeem, grandTotal, method, received, change, footer }
             var memberHtml = '';
             if (opts.memberName) {
                 memberHtml += '<div style="display:flex;justify-content:space-between"><span>Member</span><span style="text-align:right;max-width:55%">' + opts.memberName + '</span></div>';
@@ -1637,6 +1646,7 @@
                 tunaiHtml = '<div style="display:flex;justify-content:space-between"><span>Tunai</span><span>' + opts.receivedFmt + '</span></div>'
                           + '<div style="display:flex;justify-content:space-between"><span>Kembali</span><span>' + opts.changeFmt + '</span></div>';
             }
+            var kasirNama = opts.kasir || (currentUser ? currentUser.nama : 'Admin');
             return '<div style="width:58mm;font-family:Courier New,Courier,monospace;font-size:10px;padding:4px;line-height:1.5">'
                 + '<div style="text-align:center;font-weight:bold;font-size:13px;margin-bottom:2px">' + opts.namaT + '</div>'
                 + (opts.alamatT ? '<div style="text-align:center;font-size:9px">' + opts.alamatT + '</div>' : '')
@@ -1645,7 +1655,7 @@
                 + '<div style="display:flex;justify-content:space-between"><span>No. Trx</span><span>' + opts.noTrx + '</span></div>'
                 + '<div style="display:flex;justify-content:space-between"><span>Tanggal</span><span>' + opts.tgl + '</span></div>'
                 + '<div style="display:flex;justify-content:space-between"><span>Jam</span><span>' + opts.jam + '</span></div>'
-                + '<div style="display:flex;justify-content:space-between"><span>Kasir</span><span>Admin</span></div>'
+                + '<div style="display:flex;justify-content:space-between"><span>Kasir</span><span style="font-weight:bold">' + kasirNama + '</span></div>'
                 + memberHtml
                 + '<div style="border-top:1px dashed #000;margin:4px 0"></div>'
                 + opts.itemsHtml
@@ -1657,7 +1667,7 @@
                 + tunaiHtml
                 + '<div style="display:flex;justify-content:space-between"><span>Metode</span><span>' + opts.method + '</span></div>'
                 + '<div style="border-top:1px dashed #000;margin:4px 0"></div>'
-                + '<div style="text-align:center;font-size:9px;margin-top:2px">' + opts.footer + '</div>'
+                + '<div style="text-align:center;font-size:9px;margin-top:2px;white-space:pre-wrap">' + opts.footer + '</div>'
                 + '</div>';
         }
 
@@ -2127,6 +2137,70 @@
             });
         }
 
+        function quickStockUpdate(productId) {
+            if (!currentUser || currentUser.role !== 'admin') {
+                showAlert('Akses Ditolak', 'Fitur ini hanya tersedia untuk admin.', 'warning');
+                return;
+            }
+            var prod = state.products.find(function(p){ return p.id === productId; });
+            if (!prod) return;
+
+            var overlay  = document.getElementById('notif-overlay');
+            var iconWrap = document.getElementById('notif-icon-wrap');
+            var titleEl  = document.getElementById('notif-title');
+            var msgEl    = document.getElementById('notif-msg');
+            var btns     = document.getElementById('notif-buttons');
+
+            iconWrap.className = 'w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-4 bg-green-100';
+            iconWrap.innerHTML = '<i class="ph ph-stack-plus text-3xl text-green-600"></i>';
+            titleEl.innerText  = 'Ubah Stok Cepat';
+
+            msgEl.innerHTML =
+                '<p style="font-size:13px;font-weight:600;color:#1f2937;margin-bottom:2px;">' + prod.name + '</p>'
+                + '<p style="font-size:12px;color:#6b7280;margin-bottom:16px;">Stok saat ini: <strong style="color:' + (prod.stock <= prod.minStock ? '#dc2626' : '#16a34a') + ';">' + prod.stock + ' unit</strong></p>'
+                + '<div style="display:flex;align-items:center;gap:10px;justify-content:center;">'
+                + '<button onclick="qsStep(-1)" style="width:44px;height:44px;background:#fee2e2;color:#dc2626;border:none;border-radius:10px;font-size:24px;font-weight:900;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">−</button>'
+                + '<input type="number" id="quick-stock-input" value="' + prod.stock + '" min="0" '
+                + 'style="width:90px;padding:8px 4px;border:2px solid #d1d5db;border-radius:10px;font-size:22px;font-weight:800;text-align:center;outline:none;" />'
+                + '<button onclick="qsStep(+1)" style="width:44px;height:44px;background:#dcfce7;color:#16a34a;border:none;border-radius:10px;font-size:24px;font-weight:900;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">+</button>'
+                + '</div>';
+
+            btns.innerHTML =
+                '<button onclick="closeNotif()" style="padding:9px 20px;border:1px solid #d1d5db;background:#fff;color:#374151;font-weight:600;border-radius:10px;cursor:pointer;">Batal</button>'
+                + '<button onclick="applyQuickStockManual(\'' + productId + '\')" style="padding:9px 28px;background:#16a34a;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">OK</button>';
+
+            overlay.classList.remove('hidden');
+            setTimeout(function(){ var el = document.getElementById('quick-stock-input'); if(el){ el.focus(); el.select(); } }, 100);
+        }
+
+        function qsStep(delta) {
+            var inp = document.getElementById('quick-stock-input');
+            if (!inp) return;
+            inp.value = Math.max(0, (parseInt(inp.value) || 0) + delta);
+        }
+
+        function applyQuickStock(productId, delta) {
+            var prod = state.products.find(function(p){ return p.id === productId; });
+            if (!prod) return;
+            var newStock = Math.max(0, prod.stock + delta);
+            prod.stock = newStock;
+            if (GAS_URL) gasPost({ action: 'stockOpname', updates: [{ id: prod.id, stock: newStock }] }).catch(function(){});
+            showToast('Stok ' + prod.name + ' → ' + newStock + ' unit', 'success');
+        }
+
+        function applyQuickStockManual(productId) {
+            var inp = document.getElementById('quick-stock-input');
+            if (!inp) return;
+            var newStock = Math.max(0, parseInt(inp.value) || 0);
+            var prod = state.products.find(function(p){ return p.id === productId; });
+            if (!prod) return;
+            prod.stock = newStock;
+            if (GAS_URL) gasPost({ action: 'stockOpname', updates: [{ id: prod.id, stock: newStock }] }).catch(function(){});
+            closeNotif();
+            renderContent();
+            showToast('Stok ' + prod.name + ' → ' + newStock + ' unit', 'success');
+        }
+
         function getProductHTML() {
             let tableContent = '';
 
@@ -2252,6 +2326,7 @@
                                                 : `<span class="text-sm text-gray-300">—</span>`}
                                         </td>
                                         <td class="py-3 px-5 flex justify-end gap-2">
+                                            ${currentUser && currentUser.role === 'admin' ? `<button onclick="quickStockUpdate('${product.id}')" title="Ubah Stok Cepat" class="p-1.5 text-green-600 hover:bg-green-50 rounded transition-colors"><i class="ph ph-stack-plus text-lg"></i></button>` : ''}
                                             <button onclick="openProductModal('${product.id}')" title="Edit" class="p-1.5 text-blue-500 hover:bg-blue-50 rounded transition-colors"><i class="ph ph-pencil-simple text-lg"></i></button>
                                             <button onclick="deleteProduct('${product.id}')" title="Hapus" class="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"><i class="ph ph-trash text-lg"></i></button>
                                         </td>
@@ -2356,6 +2431,37 @@
                         <button onclick="saveAdminCredentials()" class="mt-4 px-4 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors text-sm flex items-center gap-2"><i class="ph ph-floppy-disk"></i> Simpan Kredensial Admin</button>
                     </div>
 
+                    <!-- Password Pembatalan Transaksi -->
+                    <div class="bg-white rounded-xl shadow-sm border border-red-100 p-6">
+                        <h2 class="text-lg font-semibold text-gray-800 mb-1 flex items-center gap-2"><i class="ph ph-arrow-u-up-left text-red-500"></i> Password Pembatalan Transaksi</h2>
+                        <p class="text-xs text-gray-400 mb-4">Password ini digunakan untuk memverifikasi pembatalan transaksi di menu Laporan. Berlaku untuk semua pengguna (admin & karyawan).</p>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Password Baru</label>
+                                <div class="relative">
+                                    <i class="ph ph-lock-key absolute left-3 top-1/2 -translate-y-1/2 text-red-500 text-base pointer-events-none"></i>
+                                    <input type="password" id="set-cancel-pwd" placeholder="Password pembatalan baru..." class="w-full pl-9 pr-9 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-red-400 text-sm" />
+                                    <button type="button" onclick="togglePwdField('set-cancel-pwd','set-cancel-eye')" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><i id="set-cancel-eye" class="ph ph-eye text-base"></i></button>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Konfirmasi Password</label>
+                                <div class="relative">
+                                    <i class="ph ph-lock-key absolute left-3 top-1/2 -translate-y-1/2 text-red-500 text-base pointer-events-none"></i>
+                                    <input type="password" id="set-cancel-pwd2" placeholder="Ulangi password..." class="w-full pl-9 pr-9 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-red-400 text-sm" />
+                                    <button type="button" onclick="togglePwdField('set-cancel-pwd2','set-cancel-eye2')" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><i id="set-cancel-eye2" class="ph ph-eye text-base"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-3 p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-700 flex items-start gap-2">
+                            <i class="ph ph-info shrink-0 mt-0.5"></i>
+                            <span>Password saat ini: <strong>${cancelRefundPwd}</strong> — Jaga kerahasiaan password ini. Hanya berikan ke orang yang berwenang membatalkan transaksi.</span>
+                        </div>
+                        <button onclick="saveCancelPassword()" class="mt-4 px-4 py-2 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 transition-colors text-sm flex items-center gap-2">
+                            <i class="ph ph-floppy-disk"></i> Simpan Password Pembatalan
+                        </button>
+                    </div>
+
                     <!-- Maintenance & Pembersihan Data -->
                     <div class="bg-white rounded-xl shadow-sm border border-orange-100 p-6">
                         <h2 class="text-lg font-semibold text-gray-800 mb-1 flex items-center gap-2">
@@ -2393,6 +2499,18 @@
                     </div>
                 </div>
             `;
+        }
+
+        function saveCancelPassword() {
+            var p1 = (document.getElementById('set-cancel-pwd').value  || '').trim();
+            var p2 = (document.getElementById('set-cancel-pwd2').value || '').trim();
+            if (!p1) { showAlert('Kosong', 'Masukkan password pembatalan baru.', 'warning'); return; }
+            if (p1 !== p2) { showAlert('Tidak Cocok', 'Konfirmasi password tidak cocok.', 'warning'); return; }
+            if (p1.length < 4) { showAlert('Terlalu Pendek', 'Password minimal 4 karakter.', 'warning'); return; }
+            cancelRefundPwd = p1;
+            if (GAS_URL) gasPost({ action: 'savePengaturan', key: 'cancel_pwd', value: p1 }).catch(function(){});
+            renderContent();
+            showToast('Password pembatalan transaksi berhasil diperbarui!', 'success');
         }
 
         function saveAdminCredentials() {
@@ -3377,23 +3495,75 @@
             if (!s) { showAlert('Tidak Ditemukan', 'Data transaksi tidak ditemukan.', 'error'); return; }
             if (s.refunded) { showAlert('Sudah Dibatalkan', 'Transaksi ini sudah pernah dibatalkan.', 'warning'); return; }
 
-            var isAdmin = currentUser && currentUser.role === 'admin';
-            var itemStr = s.items.map(function(it){ return it.name + ' x' + it.qty; }).join(', ');
-            var konfirmMsg = 'Batalkan transaksi ' + trxId + '?\n\nItem: ' + itemStr + '\nTotal: ' + formatRp(s.total)
-                + '\n\n• Stok produk akan dikembalikan'
-                + (s.poinDidapat > 0 ? '\n• Poin ' + s.poinDidapat + ' pts akan dikurangi dari pelanggan' : '');
+            // Tampilkan modal pilih item yang ingin dibatalkan
+            tampilPilihItemRefund(trxId, s);
+        }
 
-            if (isAdmin) {
-                // Admin langsung konfirmasi tanpa password
-                showConfirm('Batalkan Transaksi', konfirmMsg, 'error', function() {
-                    prosesRefund(trxId);
-                });
-            } else {
-                // Karyawan harus verifikasi password admin
-                tampilVerifikasiAdmin('Batalkan Transaksi', konfirmMsg, function() {
-                    prosesRefund(trxId);
-                });
+        function tampilPilihItemRefund(trxId, s) {
+            var overlay = document.getElementById('notif-overlay');
+            var iconWrap = document.getElementById('notif-icon-wrap');
+            var titleEl  = document.getElementById('notif-title');
+            var msgEl    = document.getElementById('notif-msg');
+            var btns     = document.getElementById('notif-buttons');
+
+            iconWrap.className = 'w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-4 bg-red-100';
+            iconWrap.innerHTML = '<i class="ph ph-arrow-u-up-left text-3xl text-red-600"></i>';
+            titleEl.innerText  = 'Batalkan Transaksi ' + trxId;
+
+            var itemsHtml = s.items.map(function(it, i) {
+                return '<label style="display:flex;align-items:center;gap:8px;padding:7px 8px;border:1px solid #e5e7eb;border-radius:8px;cursor:pointer;margin-bottom:5px;background:#fafafa;">'
+                    + '<input type="checkbox" id="refund-item-' + i + '" value="' + i + '" checked style="width:16px;height:16px;accent-color:#dc2626;flex-shrink:0;">'
+                    + '<span style="flex:1;font-size:12px;font-weight:600;color:#1f2937;">' + it.name + '</span>'
+                    + '<span style="font-size:11px;color:#6b7280;white-space:nowrap;">x' + it.qty + ' &bull; ' + formatRp(it.total) + '</span>'
+                    + '</label>';
+            }).join('');
+
+            msgEl.innerHTML = '<div style="text-align:left;">'
+                + '<p style="font-size:12px;color:#6b7280;margin-bottom:8px;">Pilih produk yang ingin dibatalkan:</p>'
+                + '<div style="max-height:200px;overflow-y:auto;margin-bottom:10px;">' + itemsHtml + '</div>'
+                + '<div style="display:flex;gap:6px;margin-bottom:10px;">'
+                + '<button onclick="(function(){var cbs=document.querySelectorAll(\'[id^=refund-item-]\');cbs.forEach(function(c){c.checked=true;});})()" style="font-size:11px;color:#16a34a;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:3px 8px;cursor:pointer;">Pilih Semua</button>'
+                + '<button onclick="(function(){var cbs=document.querySelectorAll(\'[id^=refund-item-]\');cbs.forEach(function(c){c.checked=false;});})()" style="font-size:11px;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:3px 8px;cursor:pointer;">Batal Semua</button>'
+                + '</div>'
+                + '<div style="border-top:1px solid #e5e7eb;padding-top:10px;">'
+                + '<label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;"><i class="ph ph-lock-key" style="color:#dc2626;"></i> Password Pembatalan</label>'
+                + '<input type="password" id="refund-pwd-input" placeholder="Masukkan password pembatalan..." '
+                + 'style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;outline:none;" '
+                + 'onkeydown="if(event.key===\'Enter\') refundSubmitWithItems(\'' + trxId + '\')" />'
+                + '<div id="refund-pwd-err" class="hidden" style="color:#dc2626;font-size:11px;margin-top:3px;">Password salah!</div>'
+                + '</div>'
+                + '</div>';
+
+            btns.innerHTML = '<button onclick="closeNotif()" style="padding:8px 18px;border:1px solid #d1d5db;background:#fff;color:#374151;font-weight:600;border-radius:10px;cursor:pointer;">Batal</button>'
+                + '<button onclick="refundSubmitWithItems(\'' + trxId + '\')" style="padding:8px 18px;background:#dc2626;color:#fff;font-weight:700;border-radius:10px;border:none;cursor:pointer;display:flex;align-items:center;gap:5px;"><i class="ph ph-arrow-u-up-left"></i> Batalkan</button>';
+
+            overlay.classList.remove('hidden');
+            overlay._trxId = trxId;
+            setTimeout(function(){ var el = document.getElementById('refund-pwd-input'); if(el) el.focus(); }, 150);
+        }
+
+        function refundSubmitWithItems(trxId) {
+            var pwd = (document.getElementById('refund-pwd-input') ? document.getElementById('refund-pwd-input').value : '');
+            var errEl = document.getElementById('refund-pwd-err');
+            if (pwd !== cancelRefundPwd) {
+                if (errEl) errEl.classList.remove('hidden');
+                return;
             }
+            // Kumpulkan item yang dipilih
+            var s = state.salesHistory.find(function(x){ return x.id === trxId; });
+            if (!s) { closeNotif(); return; }
+            var selectedItems = [];
+            s.items.forEach(function(it, i) {
+                var cb = document.getElementById('refund-item-' + i);
+                if (cb && cb.checked) selectedItems.push(i);
+            });
+            if (selectedItems.length === 0) {
+                if (errEl) { errEl.textContent = 'Pilih minimal 1 produk!'; errEl.classList.remove('hidden'); }
+                return;
+            }
+            var isFullRefund = selectedItems.length === s.items.length;
+            closeNotif();
+            prosesRefundItems(trxId, selectedItems, isFullRefund);
         }
 
         function tampilVerifikasiAdmin(judul, pesan, onVerified) {
@@ -3433,13 +3603,15 @@
             if (fn) fn();
         }
 
-        async function prosesRefund(trxId) {
+        async function prosesRefundItems(trxId, selectedIndexes, isFullRefund) {
             var s = state.salesHistory.find(function(x){ return x.id === trxId; });
             if (!s) return;
 
-            // 1. Kembalikan stok produk
             var stockUpdates = [];
-            s.items.forEach(function(it) {
+            var selectedItems = selectedIndexes.map(function(i){ return s.items[i]; });
+
+            // 1. Kembalikan stok produk yang dipilih
+            selectedItems.forEach(function(it) {
                 var prod = state.products.find(function(p){ return p.name === it.name; });
                 if (prod) {
                     prod.stock += it.qty;
@@ -3447,41 +3619,53 @@
                 }
             });
 
-            // 2. Kurangi poin pelanggan jika ada
-            if (s.poinDidapat && s.poinDidapat > 0 && s.memberId) {
-                var cust = state.customers.find(function(c){ return c.id === s.memberId; });
-                if (cust) {
-                    cust.poin = Math.max(0, cust.poin - s.poinDidapat);
-                    cust.poinAkumulasi = Math.max(0, (cust.poinAkumulasi||0) - s.poinDidapat);
-                    cust.totalBelanja  = Math.max(0, (cust.totalBelanja||0) - s.total);
-                    if (GAS_URL) {
-                        gasPost({ action: 'updatePoinAfterCheckout',
-                            customerId: cust.id, poin: cust.poin,
-                            poinAkumulasi: cust.poinAkumulasi,
-                            totalBelanja: cust.totalBelanja
-                        }).catch(function(){});
+            if (isFullRefund) {
+                // 2. Kurangi poin pelanggan jika full refund
+                if (s.poinDidapat && s.poinDidapat > 0 && s.memberId) {
+                    var cust = state.customers.find(function(c){ return c.id === s.memberId; });
+                    if (cust) {
+                        cust.poin = Math.max(0, cust.poin - s.poinDidapat);
+                        cust.poinAkumulasi = Math.max(0, (cust.poinAkumulasi||0) - s.poinDidapat);
+                        cust.totalBelanja  = Math.max(0, (cust.totalBelanja||0) - s.total);
+                        if (GAS_URL) gasPost({ action: 'updatePoinAfterCheckout', customerId: cust.id, poin: cust.poin, poinAkumulasi: cust.poinAkumulasi, totalBelanja: cust.totalBelanja }).catch(function(){});
                     }
                 }
-            }
-
-            // 3. Tandai transaksi sebagai refunded
-            s.refunded = true;
-            s.refundDate = new Date().toISOString();
-            s.refundBy = currentUser ? currentUser.nama : '-';
-
-            // 4. Simpan ke GAS
-            if (GAS_URL) {
-                // Update stok
-                if (stockUpdates.length > 0) {
-                    gasPost({ action: 'stockOpname', updates: stockUpdates }).catch(function(){});
+                // 3. Tandai seluruh transaksi sebagai refunded
+                s.refunded = true;
+                s.refundDate = new Date().toISOString();
+                s.refundBy = currentUser ? currentUser.nama : '-';
+                if (GAS_URL) {
+                    if (stockUpdates.length > 0) gasPost({ action: 'stockOpname', updates: stockUpdates }).catch(function(){});
+                    gasPost({ action: 'refundSale', id: trxId, refundBy: s.refundBy, refundDate: s.refundDate }).catch(function(){});
                 }
-                // Tandai transaksi refunded di spreadsheet
-                gasPost({ action: 'refundSale', id: trxId,
-                    refundBy: s.refundBy, refundDate: s.refundDate }).catch(function(){});
+                showToast('Transaksi ' + trxId + ' dibatalkan. Stok ' + selectedItems.length + ' produk dikembalikan.', 'success');
+            } else {
+                // Partial refund: hapus item dari transaksi, recalculate total
+                var removedTotal = selectedItems.reduce(function(sum, it){ return sum + (it.total || 0); }, 0);
+                // Hapus item yang dipilih dari transaksi
+                var remainingIndexes = [];
+                s.items.forEach(function(it, i){ if (selectedIndexes.indexOf(i) < 0) remainingIndexes.push(i); });
+                s.items = remainingIndexes.map(function(i){ return s.items[i]; }); 
+                // Recalculate setelah item dihapus
+                var remaining = [];
+                var allItems  = state.salesHistory.find(function(x){ return x.id === trxId; }).items;
+                // items sudah diubah di atas, recalc total
+                s.total = Math.max(0, s.total - removedTotal);
+                if (GAS_URL) {
+                    if (stockUpdates.length > 0) gasPost({ action: 'stockOpname', updates: stockUpdates }).catch(function(){});
+                }
+                showToast(selectedItems.length + ' produk dibatalkan dari transaksi ' + trxId + '. Stok dikembalikan.', 'success');
             }
 
             renderContent();
-            showToast('Transaksi ' + trxId + ' berhasil dibatalkan. Stok sudah dikembalikan.', 'success');
+        }
+
+        async function prosesRefund(trxId) {
+            // Legacy: full refund (dipanggil dari tempat lain jika ada)
+            var s = state.salesHistory.find(function(x){ return x.id === trxId; });
+            if (!s) return;
+            var allIndexes = s.items.map(function(_, i){ return i; });
+            prosesRefundItems(trxId, allIndexes, true);
         }
 
         // Preview + cetak ulang struk dari riwayat laporan
@@ -3528,7 +3712,7 @@
                 padL('No. Trx', s.id) + '\n' +
                 padL('Tanggal', tgl)  + '\n' +
                 padL('Jam', jam)      + '\n' +
-                padL('Kasir', 'Admin') + '\n' +
+                padL('Kasir', s.kasir || 'Admin') + '\n' +
                 memberLine +
                 sep + '\n' +
                 itemLines +
@@ -3538,7 +3722,10 @@
                 padL('TOTAL', formatRp(s.total).replace('Rp\u00a0','Rp ')) + '\n' +
                 padL('Metode', s.method) + '\n' +
                 sep + '\n' +
-                '   ' + footerStruk + '\n' +
+                (function() {
+                    var lines = footerStruk.split('\n');
+                    return lines.map(function(l){ var pad = Math.max(0, Math.floor((W - l.length)/2)); return Array(pad+1).join(' ') + l; }).join('\n');
+                })() + '\n' +
                 '================================';
 
             document.getElementById('struk-preview-content').innerText = preview;
@@ -3567,6 +3754,7 @@
                 namaT:       namaTokoStruk,
                 alamatT:     alamatTokoStruk,
                 telp:        noHpTokoStruk,
+                kasir:       s.kasir || 'Admin',
                 noTrx:       s.id,
                 tgl:         tgl,
                 jam:         jam,
@@ -4901,6 +5089,153 @@
                 if (bod) bod.innerHTML = getClerekRiwayatHTML();
                 showToast('Riwayat shift dihapus.','success');
             });
+        }
+
+        // --- FAQ ---
+        var _faqPage = 0; // halaman aktif FAQ (0-based)
+        var _faqPerPage = 5;
+
+        function getFaqHTML() {
+            var faqs = [
+                {
+                    icon: 'ph-squares-four', color: '#16a34a',
+                    title: 'Dashboard',
+                    desc: 'Halaman utama yang menampilkan ringkasan bisnis secara real-time: omzet hari ini, jumlah transaksi, total member, stok menipis, dan 5 produk terlaris. Klik kartu ringkasan untuk langsung berpindah ke menu terkait.'
+                },
+                {
+                    icon: 'ph-shopping-cart', color: '#0284c7',
+                    title: 'Penjualan (Kasir / POS)',
+                    desc: 'Menu kasir untuk melakukan transaksi penjualan. Cara pakai: (1) Buka shift di menu Clerek terlebih dahulu. (2) Cari produk via kolom pencarian, filter kategori, atau scan barcode. (3) Klik produk untuk menambah ke keranjang. (4) Atur qty, diskon, dan member. (5) Pilih metode bayar: Tunai, QRIS, atau Kartu. (6) Klik "Proses Pembayaran" dan struk akan otomatis tercetak. Di mobile, gunakan tab "Produk" dan "Keranjang" untuk berpindah tampilan.'
+                },
+                {
+                    icon: 'ph-package', color: '#7c3aed',
+                    title: 'Produk Saya',
+                    desc: 'Kelola semua produk/layanan toko. Fitur: tambah produk baru, edit harga/stok/diskon, hapus produk, atur harga grosir (harga khusus untuk pembelian qty tertentu), atur poin per unit untuk program reward, dan lihat stok saat ini. Data produk tersimpan di Google Spreadsheet dan otomatis tersinkronisasi.'
+                },
+                {
+                    icon: 'ph-users', color: '#0891b2',
+                    title: 'Pelanggan',
+                    desc: 'Kelola data member/pelanggan. Fitur: tambah pelanggan baru, edit data, hapus, lihat total belanja, poin aktif, dan poin akumulasi. ID member dibuat otomatis dengan format ZTR0000001. Pelanggan bisa dicari berdasarkan nama atau nomor HP saat transaksi di kasir.'
+                },
+                {
+                    icon: 'ph-clipboard-text', color: '#b45309',
+                    title: 'Stock Opname',
+                    desc: 'Menu untuk menyesuaikan stok produk secara manual. Masukkan jumlah stok aktual di lapangan, lalu simpan. Sistem akan memperbarui stok di spreadsheet. Berguna setelah penghitungan stok fisik. Dilengkapi fitur pencarian dan filter untuk menemukan produk dengan cepat.'
+                },
+                {
+                    icon: 'ph-star', color: '#d97706',
+                    title: 'Poin & Reward',
+                    desc: 'Sistem loyalitas pelanggan. Terdiri dari 3 tab: (1) Aturan Poin — atur berapa poin yang didapat per produk, dan atur konversi nilai poin (misal 1 poin = Rp 1). (2) Daftar Reward — kelola hadiah yang bisa ditukar dengan poin. (3) Poin Pelanggan — lihat poin semua pelanggan, tier (Bronze/Silver/Gold/Platinum), dan riwayat poin. Poin bisa ditukar saat checkout sebagai potongan harga.'
+                },
+                {
+                    icon: 'ph-file-text', color: '#059669',
+                    title: 'Laporan',
+                    desc: 'Laporan riwayat transaksi lengkap. Fitur: filter berdasarkan hari ini, minggu ini, bulan ini, atau semua waktu. Tampilkan ringkasan omzet, jumlah transaksi, dan total refund. Setiap transaksi bisa di-preview struk, dicetak ulang, diunduh PDF, atau dibatalkan (refund). Saat membatalkan, pilih produk spesifik yang ingin dibatalkan — tidak harus seluruh transaksi. Pembatalan memerlukan password khusus yang diatur di menu Pengaturan.'
+                },
+                {
+                    icon: 'ph-gear', color: '#475569',
+                    title: 'Pengaturan',
+                    desc: 'Konfigurasi sistem: (1) Pengaturan Toko — nama toko, alamat, no HP, dan pesan footer struk. (2) Foto QRIS — upload gambar QRIS toko untuk ditampilkan saat pembayaran. (3) Kredensial Admin — ubah username dan password login admin. (4) Password Pembatalan Transaksi — atur password khusus untuk memverifikasi pembatalan transaksi (berlaku untuk semua pengguna). (5) Pembersihan Data — hapus riwayat transaksi lama secara manual untuk menjaga performa.'
+                },
+                {
+                    icon: 'ph-user-circle-gear', color: '#7c3aed',
+                    title: 'Karyawan',
+                    desc: 'Manajemen akun karyawan (hanya admin). Tambah, edit, atau hapus akun karyawan. Setiap karyawan memiliki username dan password sendiri untuk login. Karyawan hanya dapat mengakses menu: Dashboard, Penjualan, Pelanggan, Poin & Reward, Laporan, Clerek, dan FAQ. Menu Produk Saya, Stock Opname, Pengaturan, dan Karyawan hanya bisa diakses admin.'
+                },
+                {
+                    icon: 'ph-user-check', color: '#0369a1',
+                    title: 'Clerek (Manajemen Shift)',
+                    desc: 'Sistem manajemen shift kasir. Fitur: (1) Buka Shift — catat kas awal sebelum mulai berjualan. (2) Mutasi Kas — catat pemasukan/pengeluaran kas selama shift. (3) Tutup Shift — hitung selisih kas akhir vs omzet. (4) Catatan — buat catatan to-do atau pesan antar shift. (5) Riwayat Shift — lihat semua shift sebelumnya. Admin bisa "Ambil Alih Shift" aktif karyawan untuk bisa mengakses menu Penjualan.'
+                },
+                {
+                    icon: 'ph-question', color: '#6366f1',
+                    title: 'FAQ (Bantuan)',
+                    desc: 'Halaman ini — berisi penjelasan lengkap semua menu dan fungsi aplikasi kasir Z-TRONIK. Gunakan sebagai referensi jika ada fitur yang belum dipahami.'
+                },
+                {
+                    icon: 'ph-arrow-u-up-left', color: '#dc2626',
+                    title: 'Cara Membatalkan Sebagian Produk dalam Transaksi',
+                    desc: 'Buka menu Laporan → cari transaksi → klik tombol "Batalkan". Akan muncul daftar produk dalam transaksi tersebut — centang produk yang ingin dibatalkan (boleh sebagian atau semua). Masukkan password pembatalan, lalu klik "Batalkan". Stok produk yang dibatalkan akan otomatis dikembalikan. Untuk full refund, pilih semua produk — transaksi akan ditandai "Dibatalkan".'
+                },
+                {
+                    icon: 'ph-barcode', color: '#0f766e',
+                    title: 'Scan Barcode',
+                    desc: 'Fitur scan barcode tersedia di menu Penjualan (tombol "Scan") dan di form Produk Saya saat tambah/edit produk. Membutuhkan izin kamera dari browser. Arahkan kamera ke barcode/QR code produk — produk langsung ditambahkan ke keranjang atau kode barcode terisi otomatis di form.'
+                },
+                {
+                    icon: 'ph-printer', color: '#374151',
+                    title: 'Cetak Struk',
+                    desc: 'Struk dicetak otomatis setelah setiap transaksi selesai (format 58mm). Struk berisi: nama toko, no transaksi, tanggal/jam, nama kasir, data member (jika ada), daftar produk, total, metode bayar, dan pesan footer. Struk lama bisa dicetak ulang dari menu Laporan → klik ikon preview/cetak pada transaksi yang diinginkan.'
+                },
+            ];
+
+            var totalPages = Math.ceil(faqs.length / _faqPerPage);
+            if (_faqPage >= totalPages) _faqPage = totalPages - 1;
+            if (_faqPage < 0) _faqPage = 0;
+            var start = _faqPage * _faqPerPage;
+            var pageItems = faqs.slice(start, start + _faqPerPage);
+
+            var accordionItems = pageItems.map(function(f, i) {
+                var globalIdx = start + i;
+                return '<div style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;" id="faq-item-' + globalIdx + '">'
+                    + '<button onclick="toggleFaq(' + globalIdx + ')" '
+                    + 'style="width:100%;display:flex;align-items:center;gap:12px;padding:13px 16px;background:#fff;border:none;cursor:pointer;text-align:left;"'
+                    + 'onmouseover="this.style.background=\'#f9fafb\'" onmouseout="this.style.background=\'#fff\'">'
+                    + '<div style="width:36px;height:36px;border-radius:9px;background:' + f.color + '15;display:flex;align-items:center;justify-content:center;flex-shrink:0;">'
+                    + '<i class="ph ' + f.icon + '" style="color:' + f.color + ';font-size:18px;"></i>'
+                    + '</div>'
+                    + '<span style="flex:1;font-size:13px;font-weight:600;color:#1f2937;">' + f.title + '</span>'
+                    + '<i id="faq-arrow-' + globalIdx + '" class="ph ph-caret-down" style="color:#9ca3af;font-size:16px;transition:transform 0.2s;flex-shrink:0;"></i>'
+                    + '</button>'
+                    + '<div id="faq-body-' + globalIdx + '" style="display:none;padding:0 16px 14px 64px;background:#fafafa;border-top:1px solid #f0f0f0;">'
+                    + '<p style="font-size:12px;color:#4b5563;line-height:1.7;margin:10px 0 0;">' + f.desc + '</p>'
+                    + '</div>'
+                    + '</div>';
+            }).join('');
+
+            var prevDisabled = _faqPage === 0;
+            var nextDisabled = _faqPage >= totalPages - 1;
+            var navHtml = '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;">'
+                + '<button onclick="changeFaqPage(-1)" ' + (prevDisabled ? 'disabled' : '') + ' '
+                + 'style="display:flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;border:1px solid ' + (prevDisabled ? '#e5e7eb' : '#16a34a') + ';background:' + (prevDisabled ? '#f9fafb' : '#fff') + ';color:' + (prevDisabled ? '#d1d5db' : '#16a34a') + ';font-size:13px;font-weight:600;cursor:' + (prevDisabled ? 'not-allowed' : 'pointer') + ';">'
+                + '<i class="ph ph-caret-left"></i> Prev'
+                + '</button>'
+                + '<span style="font-size:12px;color:#6b7280;">Hal ' + (_faqPage + 1) + ' / ' + totalPages + ' &bull; ' + faqs.length + ' topik</span>'
+                + '<button onclick="changeFaqPage(1)" ' + (nextDisabled ? 'disabled' : '') + ' '
+                + 'style="display:flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;border:1px solid ' + (nextDisabled ? '#e5e7eb' : '#16a34a') + ';background:' + (nextDisabled ? '#f9fafb' : '#16a34a') + ';color:' + (nextDisabled ? '#d1d5db' : '#fff') + ';font-size:13px;font-weight:600;cursor:' + (nextDisabled ? 'not-allowed' : 'pointer') + ';">'
+                + 'Next <i class="ph ph-caret-right"></i>'
+                + '</button>'
+                + '</div>';
+
+            return '<div style="max-width:680px;">'
+                + '<div style="background:linear-gradient(135deg,#14532d,#16a34a);border-radius:16px;padding:20px 24px;margin-bottom:20px;color:#fff;">'
+                + '<div style="display:flex;align-items:center;gap:12px;">'
+                + '<i class="ph ph-question" style="font-size:32px;opacity:0.9;"></i>'
+                + '<div><div style="font-size:18px;font-weight:900;letter-spacing:0.3px;">FAQ & Panduan Penggunaan</div>'
+                + '<div style="font-size:12px;opacity:0.8;margin-top:2px;">Klik salah satu menu di bawah untuk melihat penjelasannya</div>'
+                + '</div></div>'
+                + '</div>'
+                + '<div style="display:flex;flex-direction:column;gap:6px;">'
+                + accordionItems
+                + '</div>'
+                + navHtml
+                + '<p style="text-align:center;font-size:11px;color:#9ca3af;margin-top:16px;">Z-TRONIK POS &bull; Sistem Kasir Digital &bull; Versi 6.1</p>'
+                + '</div>';
+        }
+
+        function toggleFaq(i) {
+            var body  = document.getElementById('faq-body-' + i);
+            var arrow = document.getElementById('faq-arrow-' + i);
+            if (!body) return;
+            var isOpen = body.style.display !== 'none';
+            body.style.display  = isOpen ? 'none' : 'block';
+            if (arrow) arrow.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
+        }
+
+        function changeFaqPage(dir) {
+            _faqPage += dir;
+            var contentArea = document.getElementById('content-area');
+            if (contentArea) contentArea.innerHTML = getFaqHTML();
         }
 
         // --- INIT APP ---
