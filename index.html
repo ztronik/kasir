@@ -580,7 +580,7 @@
                     }
                     state.isLoading = false;
                     showToast('Data dimuat: ' + state.products.length + ' produk, ' + state.customers.length + ' pelanggan.', 'success');
-                    // Auto-cleanup silent
+                    // Auto-cleanup silent: transaksi > 30 hari
                     (function() {
                         var batas = new Date();
                         batas.setDate(batas.getDate() - 30);
@@ -595,6 +595,21 @@
                                     });
                                 }
                             }).catch(function(){});
+                        }
+                    })();
+                    // Auto-cleanup silent: riwayat shift > 30 hari
+                    (function() {
+                        var batas = new Date();
+                        batas.setDate(batas.getDate() - 30);
+                        var adaLama = clerekState.riwayatShift.some(function(r) {
+                            return r.mulai && new Date(r.mulai) < batas;
+                        });
+                        if (adaLama) {
+                            clerekState.riwayatShift = clerekState.riwayatShift.filter(function(r) {
+                                return r.mulai && new Date(r.mulai) >= batas;
+                            });
+                            // Kirim ke GAS untuk hapus di spreadsheet juga
+                            if (GAS_URL) gasPost({ action: 'bersihkanShiftLama', hariMaksimal: 30 }).catch(function(){});
                         }
                     })();
                 } else {
@@ -4938,62 +4953,81 @@
         }
 
         // ── TAB RIWAYAT CLEREK ────────────────────────────
+        var _clerekRiwayatPage = 0;
+        var _clerekPerPage = 5;
+
         function getClerekRiwayatHTML() {
-            var listHTML = clerekState.riwayatShift.length === 0
-                ? `<div class="text-center py-10 text-gray-400 text-sm">Belum ada riwayat clerek.</div>`
-                : clerekState.riwayatShift.map(function(r, i) {
+            var total = clerekState.riwayatShift.length;
+            var totalPages = Math.max(1, Math.ceil(total / _clerekPerPage));
+            if (_clerekRiwayatPage >= totalPages) _clerekRiwayatPage = totalPages - 1;
+            if (_clerekRiwayatPage < 0) _clerekRiwayatPage = 0;
+
+            var start = _clerekRiwayatPage * _clerekPerPage;
+            var pageItems = clerekState.riwayatShift.slice(start, start + _clerekPerPage);
+
+            var listHTML = total === 0
+                ? '<div class="text-center py-10 text-gray-400 text-sm">Belum ada riwayat clerek.</div>'
+                : pageItems.map(function(r, i) {
+                    var globalIdx = start + i;
                     var dur = Math.floor((r.selesai - r.mulai) / 60000);
                     var selisih = r.kasAkhir - (r.kasAwal + r.omzet);
-                    return `<div class="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-                        <div class="flex justify-between items-start mb-3">
-                            <div>
-                                <p class="font-bold text-gray-800">${r.kasir}</p>
-                                <p class="text-xs text-gray-400">${new Date(r.mulai).toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'})}</p>
-                            </div>
-                            <span class="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full font-semibold">${dur} menit</span>
-                        </div>
-                        <div class="grid grid-cols-3 gap-2 text-center text-xs">
-                            <div class="bg-gray-50 rounded-lg p-2">
-                                <p class="text-gray-400 mb-0.5">Mulai</p>
-                                <p class="font-semibold text-gray-700">${new Date(r.mulai).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})}</p>
-                            </div>
-                            <div class="bg-gray-50 rounded-lg p-2">
-                                <p class="text-gray-400 mb-0.5">Selesai</p>
-                                <p class="font-semibold text-gray-700">${new Date(r.selesai).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})}</p>
-                            </div>
-                            <div class="bg-green-50 rounded-lg p-2">
-                                <p class="text-green-500 mb-0.5">Omzet</p>
-                                <p class="font-bold text-green-700">${formatRp(r.omzet)}</p>
-                            </div>
-                            <div class="bg-gray-50 rounded-lg p-2">
-                                <p class="text-gray-400 mb-0.5">Kas Awal</p>
-                                <p class="font-semibold text-gray-700">${formatRp(r.kasAwal)}</p>
-                            </div>
-                            <div class="bg-gray-50 rounded-lg p-2">
-                                <p class="text-gray-400 mb-0.5">Kas Akhir</p>
-                                <p class="font-semibold text-gray-700">${formatRp(r.kasAkhir||0)}</p>
-                            </div>
-                            <div class="${selisih>=0?'bg-green-50':'bg-red-50'} rounded-lg p-2">
-                                <p class="${selisih>=0?'text-green-500':'text-red-400'} mb-0.5">Selisih</p>
-                                <p class="font-bold ${selisih>=0?'text-green-700':'text-red-600'}">${selisih>=0?'+':''}${formatRp(selisih)}</p>
-                            </div>
-                        </div>
-                    </div>`;
+                    var tgl = new Date(r.mulai).toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
+                    var jamMulai   = new Date(r.mulai).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
+                    var jamSelesai = new Date(r.selesai).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
+                    return '<div class="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">'
+                        + '<div class="flex justify-between items-start mb-3">'
+                        +   '<div>'
+                        +     '<p class="font-bold text-gray-800">' + r.kasir + '</p>'
+                        +     '<p class="text-xs text-gray-400">' + tgl + ' &bull; ' + jamMulai + '–' + jamSelesai + '</p>'
+                        +   '</div>'
+                        +   '<div class="flex items-center gap-2">'
+                        +     '<span class="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full font-semibold">' + dur + ' menit</span>'
+                        +     '<button onclick="downloadSatuRiwayatClerekPDF(' + globalIdx + ')" title="Unduh PDF" '
+                        +       'class="flex items-center gap-1 px-2.5 py-1 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition-colors">'
+                        +       '<i class="ph ph-file-pdf text-sm"></i> PDF'
+                        +     '</button>'
+                        +   '</div>'
+                        + '</div>'
+                        + '<div class="grid grid-cols-3 gap-2 text-center text-xs">'
+                        +   '<div class="bg-gray-50 rounded-lg p-2"><p class="text-gray-400 mb-0.5">Kas Awal</p><p class="font-semibold text-gray-700">' + formatRp(r.kasAwal) + '</p></div>'
+                        +   '<div class="bg-gray-50 rounded-lg p-2"><p class="text-gray-400 mb-0.5">Kas Akhir</p><p class="font-semibold text-gray-700">' + formatRp(r.kasAkhir||0) + '</p></div>'
+                        +   '<div class="bg-green-50 rounded-lg p-2"><p class="text-green-500 mb-0.5">Omzet</p><p class="font-bold text-green-700">' + formatRp(r.omzet) + '</p></div>'
+                        +   '<div class="' + (selisih>=0?'bg-green-50':'bg-red-50') + ' rounded-lg p-2 col-span-3">'
+                        +     '<p class="' + (selisih>=0?'text-green-500':'text-red-400') + ' mb-0.5">Selisih Kas</p>'
+                        +     '<p class="font-bold ' + (selisih>=0?'text-green-700':'text-red-600') + '">' + (selisih>=0?'+':'') + formatRp(selisih) + '</p>'
+                        +   '</div>'
+                        + '</div>'
+                        + '</div>';
                 }).join('');
 
-            return `<div class="space-y-3">
-                <div class="flex items-center justify-between flex-wrap gap-2">
-                    <h3 class="font-bold text-gray-700 text-sm uppercase tracking-wide">Riwayat Clerek (${clerekState.riwayatShift.length})</h3>
-                    <div class="flex items-center gap-2">
-                        ${clerekState.riwayatShift.length > 0 ? `
-                        <button onclick="downloadRiwayatClerekPDF()" class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition-colors">
-                            <i class="ph ph-file-pdf text-sm"></i> Unduh PDF
-                        </button>
-                        <button onclick="clerekHapusRiwayat()" class="text-xs text-red-400 hover:text-red-600 flex items-center gap-1"><i class="ph ph-trash"></i> Hapus Semua</button>` : ''}
-                    </div>
-                </div>
-                ${listHTML}
-            </div>`;
+            var prevDis = _clerekRiwayatPage === 0;
+            var nextDis = _clerekRiwayatPage >= totalPages - 1;
+            var navHTML = total > _clerekPerPage
+                ? '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;">'
+                +   '<button onclick="changeClerekRiwayatPage(-1)" ' + (prevDis?'disabled':'') + ' '
+                +     'style="padding:7px 14px;border-radius:8px;border:1px solid ' + (prevDis?'#e5e7eb':'#16a34a') + ';background:' + (prevDis?'#f9fafb':'#fff') + ';color:' + (prevDis?'#d1d5db':'#16a34a') + ';font-size:12px;font-weight:600;cursor:' + (prevDis?'not-allowed':'pointer') + ';display:flex;align-items:center;gap:4px;">'
+                +     '<i class="ph ph-caret-left"></i> Prev</button>'
+                +   '<span style="font-size:11px;color:#6b7280;">Hal ' + (_clerekRiwayatPage+1) + '/' + totalPages + ' &bull; ' + total + ' riwayat</span>'
+                +   '<button onclick="changeClerekRiwayatPage(1)" ' + (nextDis?'disabled':'') + ' '
+                +     'style="padding:7px 14px;border-radius:8px;border:1px solid ' + (nextDis?'#e5e7eb':'#16a34a') + ';background:' + (nextDis?'#f9fafb':'#16a34a') + ';color:' + (nextDis?'#d1d5db':'#fff') + ';font-size:12px;font-weight:600;cursor:' + (nextDis?'not-allowed':'pointer') + ';display:flex;align-items:center;gap:4px;">'
+                +     'Next <i class="ph ph-caret-right"></i></button>'
+                + '</div>'
+                : '';
+
+            return '<div class="space-y-3">'
+                + '<div class="flex items-center justify-between flex-wrap gap-2">'
+                +   '<h3 class="font-bold text-gray-700 text-sm uppercase tracking-wide">Riwayat Clerek (' + total + ')</h3>'
+                +   (total > 0 ? '<button onclick="clerekHapusRiwayat()" class="text-xs text-red-400 hover:text-red-600 flex items-center gap-1"><i class="ph ph-trash"></i> Hapus Semua</button>' : '')
+                + '</div>'
+                + listHTML
+                + navHTML
+                + '</div>';
+        }
+
+        function changeClerekRiwayatPage(dir) {
+            _clerekRiwayatPage += dir;
+            var bod = document.getElementById('clerek-body');
+            if (bod) bod.innerHTML = getClerekRiwayatHTML();
         }
 
         function clerekHapusRiwayat() {
@@ -5006,75 +5040,93 @@
             });
         }
 
-        function downloadRiwayatClerekPDF() {
+        function downloadSatuRiwayatClerekPDF(idx) {
+            var r = clerekState.riwayatShift[idx];
+            if (!r) { showAlert('Error', 'Data riwayat tidak ditemukan.', 'error'); return; }
             var jsPDFLib = window.jspdf;
             if (!jsPDFLib) { showAlert('Error', 'Library PDF tidak tersedia.', 'error'); return; }
-            var doc = new jsPDFLib.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
+            var doc  = new jsPDFLib.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
             var pageW = 210, lm = 14, rm = 14, cw = pageW - lm - rm;
             var y = 16;
 
-            // Header
-            doc.setFontSize(14); doc.setFont(undefined, 'bold');
-            doc.text('Riwayat Clerek — ' + (namaTokoStruk || 'Z-TRONIK'), lm, y);
-            y += 6;
-            doc.setFontSize(9); doc.setFont(undefined, 'normal');
-            doc.setTextColor(100);
-            doc.text('Dicetak: ' + new Date().toLocaleDateString('id-ID', {day:'2-digit',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'}), lm, y);
-            doc.text('Total shift: ' + clerekState.riwayatShift.length, pageW - rm, y, { align: 'right' });
-            y += 4;
-            doc.setDrawColor(22, 163, 74); doc.setLineWidth(0.5);
+            var dur       = Math.floor((r.selesai - r.mulai) / 60000);
+            var tglMulai  = new Date(r.mulai).toLocaleDateString('id-ID', {day:'2-digit',month:'long',year:'numeric'});
+            var jamMulai  = new Date(r.mulai).toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'});
+            var jamSelesai = new Date(r.selesai).toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'});
+            var selisih   = r.kasAkhir - (r.kasAwal + r.omzet);
+
+            // Header toko
+            doc.setFontSize(13); doc.setFont(undefined, 'bold'); doc.setTextColor(20);
+            doc.text(namaTokoStruk || 'Z-TRONIK', pageW / 2, y, { align: 'center' });
+            y += 5;
+            doc.setFontSize(9); doc.setFont(undefined, 'normal'); doc.setTextColor(80);
+            doc.text('Laporan Shift Kasir', pageW / 2, y, { align: 'center' });
+            y += 5;
+            doc.setDrawColor(22, 163, 74); doc.setLineWidth(0.6);
+            doc.line(lm, y, pageW - rm, y);
+            y += 7;
+
+            // Info shift
+            function row2(label, val, bold) {
+                doc.setFontSize(9); doc.setTextColor(80);
+                doc.setFont(undefined, 'normal'); doc.text(label, lm, y);
+                doc.setFont(undefined, bold ? 'bold' : 'normal'); doc.setTextColor(20);
+                doc.text(String(val), pageW - rm, y, { align: 'right' });
+                y += 5;
+            }
+
+            row2('Kasir', r.kasir, true);
+            row2('Tanggal', tglMulai, false);
+            row2('Jam Mulai', jamMulai, false);
+            row2('Jam Selesai', jamSelesai, false);
+            row2('Durasi', dur + ' menit', false);
+            y += 2;
+
+            // Garis tipis
+            doc.setDrawColor(200); doc.setLineWidth(0.2);
             doc.line(lm, y, pageW - rm, y);
             y += 6;
 
-            clerekState.riwayatShift.forEach(function(r, i) {
-                var dur     = Math.floor((r.selesai - r.mulai) / 60000);
-                var tglMulai = new Date(r.mulai).toLocaleDateString('id-ID', {day:'2-digit',month:'2-digit',year:'numeric'});
-                var jamMulai = new Date(r.mulai).toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'});
-                var jamSelesai = new Date(r.selesai).toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'});
-                var selisih = r.kasAkhir - (r.kasAwal + r.omzet);
+            // Kas & Omzet
+            doc.setFontSize(10); doc.setFont(undefined, 'bold'); doc.setTextColor(20);
+            doc.text('Rekapitulasi Kas', lm, y);
+            y += 6;
 
-                // Cek pindah halaman
-                if (y > 265) { doc.addPage(); y = 16; }
-
-                // Judul shift
-                doc.setFontSize(10); doc.setFont(undefined, 'bold'); doc.setTextColor(30);
-                doc.text((i + 1) + '. ' + r.kasir + '  —  ' + tglMulai, lm, y);
-                doc.setFontSize(8); doc.setFont(undefined, 'normal'); doc.setTextColor(100);
-                doc.text(jamMulai + ' – ' + jamSelesai + '  (' + dur + ' menit)', pageW - rm, y, { align: 'right' });
-                y += 5;
-
-                // Data shift dalam 3 kolom
-                var col = cw / 3;
-                var rows = [
-                    ['Kas Awal', formatRp(r.kasAwal)],
-                    ['Kas Akhir', formatRp(r.kasAkhir || 0)],
-                    ['Omzet', formatRp(r.omzet)],
-                ];
-                doc.setFontSize(8); doc.setTextColor(80);
-                rows.forEach(function(row, ri) {
-                    var x = lm + ri * col;
-                    doc.setFont(undefined, 'normal'); doc.text(row[0], x, y);
-                    doc.setFont(undefined, 'bold');   doc.text(row[1], x, y + 3.5);
-                });
-                y += 9;
-
-                // Selisih
-                doc.setFontSize(8);
-                doc.setFont(undefined, 'bold');
-                doc.setTextColor(selisih >= 0 ? 22 : 220, selisih >= 0 ? 163 : 38, selisih >= 0 ? 74 : 38);
-                doc.text('Selisih: ' + (selisih >= 0 ? '+' : '') + formatRp(selisih), lm, y);
-                doc.setTextColor(100); doc.setFont(undefined, 'normal');
-                y += 4;
-
-                // Garis pemisah
-                doc.setDrawColor(220); doc.setLineWidth(0.2);
-                doc.line(lm, y, pageW - rm, y);
+            var kasRows = [
+                ['Kas Awal', formatRp(r.kasAwal)],
+                ['Omzet Shift', formatRp(r.omzet)],
+                ['Kas Akhir (Aktual)', formatRp(r.kasAkhir || 0)],
+            ];
+            kasRows.forEach(function(kr) {
+                doc.setFontSize(9); doc.setFont(undefined, 'normal'); doc.setTextColor(80);
+                doc.text(kr[0], lm + 4, y);
+                doc.setFont(undefined, 'bold'); doc.setTextColor(20);
+                doc.text(kr[1], pageW - rm, y, { align: 'right' });
                 y += 5;
             });
 
-            doc.save('Riwayat_Clerek_' + (namaTokoStruk || 'ZTRONIK') + '_' + new Date().toLocaleDateString('id-ID').replace(/\//g,'-') + '.pdf');
-            showToast('PDF riwayat clerek berhasil diunduh!', 'success');
+            // Garis tebal + Selisih
+            y += 1;
+            doc.setDrawColor(22, 163, 74); doc.setLineWidth(0.4);
+            doc.line(lm, y, pageW - rm, y);
+            y += 5;
+            doc.setFontSize(10); doc.setFont(undefined, 'bold');
+            doc.setTextColor(selisih >= 0 ? 22 : 180, selisih >= 0 ? 163 : 30, selisih >= 0 ? 74 : 30);
+            doc.text('Selisih Kas', lm, y);
+            doc.text((selisih >= 0 ? '+' : '') + formatRp(selisih), pageW - rm, y, { align: 'right' });
+            y += 10;
+
+            // Footer
+            doc.setDrawColor(200); doc.setLineWidth(0.2);
+            doc.line(lm, y, pageW - rm, y);
+            y += 5;
+            doc.setFontSize(8); doc.setFont(undefined, 'normal'); doc.setTextColor(150);
+            doc.text('Dicetak: ' + new Date().toLocaleDateString('id-ID') + '  ' + new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}), pageW / 2, y, { align: 'center' });
+
+            var fileName = 'Shift_' + r.kasir.replace(/\s/g,'_') + '_' + tglMulai.replace(/\s/g,'_') + '.pdf';
+            doc.save(fileName);
+            showToast('PDF shift ' + r.kasir + ' berhasil diunduh!', 'success');
         }
 
         // --- FAQ ---
