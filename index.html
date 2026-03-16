@@ -448,8 +448,10 @@
 
             // State paginasi Poin & Reward
             rewardListPage: 1,
+            rewardSearch:   '',
             produkRulePage: 1,
             custPoinPage:   1,
+            custPoinSearch: '',
 
             // State laporan
             laporanPage: 1,
@@ -825,6 +827,8 @@
             state.laporanPage = 1;
             state.laporanSearch = '';
             state.custPoinPage = 1;
+            state.rewardSearch = '';
+            state.custPoinSearch = '';
 
             renderSidebarMenu();
             renderContent();
@@ -3793,10 +3797,15 @@
             var goldCount = rewardData.customers.filter(function(c){ return c.tier==="Gold"; }).length;
 
             var rwdPP = 5;
-            var rwdTotal = Math.max(1, Math.ceil(rewardData.rewardList.length / rwdPP));
+            // Filter reward berdasarkan pencarian
+            var rewardFiltered = rewardData.rewardList.filter(function(r) {
+                var q = (state.rewardSearch || '').toLowerCase().trim();
+                return !q || r.name.toLowerCase().includes(q) || (r.deskripsi && r.deskripsi.toLowerCase().includes(q));
+            });
+            var rwdTotal = Math.max(1, Math.ceil(rewardFiltered.length / rwdPP));
             if (state.rewardListPage > rwdTotal) state.rewardListPage = rwdTotal;
             var rwdStart = (state.rewardListPage-1)*rwdPP;
-            var rwdShown = rewardData.rewardList.slice(rwdStart, rwdStart+rwdPP);
+            var rwdShown = rewardFiltered.slice(rwdStart, rwdStart+rwdPP);
 
 
             var rewardRows = "";
@@ -3818,23 +3827,29 @@
 
             var rwdPagination = "";
             if (rwdTotal > 1) {
-                rwdPagination = "<div class=\"flex justify-between items-center mt-2\">"
-                    + "<button onclick=\"state.rewardListPage--; renderContent()\" " + (state.rewardListPage===1 ? "disabled" : "") + " class=\"text-xs px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-40\">Prev</button>"
+                rwdPagination = "<div class=\"reward-pagination flex justify-between items-center mt-2\">"
+                    + "<button onclick=\"state.rewardListPage--; renderRewardListOnly()\" " + (state.rewardListPage===1 ? "disabled" : "") + " class=\"text-xs px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-40\">Prev</button>"
                     + "<span class=\"text-xs text-gray-400\">" + state.rewardListPage + "/" + rwdTotal + "</span>"
-                    + "<button onclick=\"state.rewardListPage++; renderContent()\" " + (state.rewardListPage===rwdTotal ? "disabled" : "") + " class=\"text-xs px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-40\">Next</button>"
+                    + "<button onclick=\"state.rewardListPage++; renderRewardListOnly()\" " + (state.rewardListPage===rwdTotal ? "disabled" : "") + " class=\"text-xs px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-40\">Next</button>"
                     + "</div>";
             }
 
-            // Pagination pelanggan poin (5 per halaman)
+            // Pagination pelanggan poin (5 per halaman) dengan filter pencarian
             var custPP    = 5;
-            var custTotal = Math.max(1, Math.ceil(rewardData.customers.length / custPP));
+            var custFiltered = rewardData.customers.filter(function(c) {
+                var q = (state.custPoinSearch || '').toLowerCase().trim();
+                return !q || c.name.toLowerCase().includes(q) || (c.id && c.id.toLowerCase().includes(q));
+            });
+            var custTotal = Math.max(1, Math.ceil(custFiltered.length / custPP));
             if (state.custPoinPage > custTotal) state.custPoinPage = custTotal;
             var custStart = (state.custPoinPage - 1) * custPP;
-            var custShown = rewardData.customers.slice(custStart, custStart + custPP);
+            var custShown = custFiltered.slice(custStart, custStart + custPP);
 
             var custRows = "";
             if (rewardData.customers.length === 0) {
                 custRows = "<tr><td colspan=\"5\" class=\"text-center py-10 text-gray-400\">Belum ada pelanggan terdaftar.</td></tr>";
+            } else if (custFiltered.length === 0) {
+                custRows = "<tr><td colspan=\"5\" class=\"text-center py-10 text-gray-400\">Tidak ada pelanggan cocok dengan pencarian.</td></tr>";
             } else {
                 custShown.forEach(function(c) {
                     var tier = getTierInfo(c.poin||0);
@@ -3878,9 +3893,9 @@
             var custPagination = "";
             if (custTotal > 1) {
                 custPagination = "<div class=\"flex justify-between items-center px-4 py-3 border-t border-gray-100 bg-gray-50/50\">"
-                    + "<button onclick=\"state.custPoinPage--; renderContent()\" " + (state.custPoinPage===1 ? "disabled" : "") + " class=\"px-3 py-1.5 border border-gray-200 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-100 disabled:opacity-50\">&lsaquo; Prev</button>"
-                    + "<span class=\"text-xs text-gray-500\">Hal " + state.custPoinPage + " dari " + custTotal + " &bull; " + rewardData.customers.length + " member</span>"
-                    + "<button onclick=\"state.custPoinPage++; renderContent()\" " + (state.custPoinPage===custTotal ? "disabled" : "") + " class=\"px-3 py-1.5 border border-gray-200 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-100 disabled:opacity-50\">Next &rsaquo;</button>"
+                    + "<button onclick=\"state.custPoinPage--; renderCustPoinTableOnly()\" " + (state.custPoinPage===1 ? "disabled" : "") + " class=\"px-3 py-1.5 border border-gray-200 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-100 disabled:opacity-50\">&lsaquo; Prev</button>"
+                    + "<span class=\"text-xs text-gray-500\">Hal " + state.custPoinPage + " dari " + custTotal + " &bull; " + custFiltered.length + " member</span>"
+                    + "<button onclick=\"state.custPoinPage++; renderCustPoinTableOnly()\" " + (state.custPoinPage===custTotal ? "disabled" : "") + " class=\"px-3 py-1.5 border border-gray-200 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-100 disabled:opacity-50\">Next &rsaquo;</button>"
                     + "</div>";
             }
 
@@ -3927,7 +3942,8 @@
                 + "<div class=\"bg-white rounded-xl shadow-sm border border-gray-100 p-4\">"
                 + "<h3 class=\"font-semibold text-gray-800 mb-1 flex items-center gap-2 text-sm\"><i class=\"ph ph-gift text-purple-600 text-base\"></i> Daftar Reward</h3>"
                 + "<p class=\"text-xs text-gray-400 mb-2\">Buat reward yang bisa ditukar member menggunakan poin aktif mereka.</p>"
-                + "<div class=\"space-y-1.5 mb-2\">" + rewardRows + "</div>" + rwdPagination
+                + "<div class=\"relative mb-2\"><input type=\"text\" id=\"reward-search-input\" placeholder=\"Cari nama reward...\" value=\"" + (state.rewardSearch||'') + "\" oninput=\"handleRewardSearch(event)\" class=\"w-full pl-7 pr-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-1 focus:ring-purple-400 focus:outline-none\" /><i class=\"ph ph-magnifying-glass absolute left-2 top-2 text-gray-400 text-xs\"></i></div>"
+                + "<div id=\"reward-list-container\" class=\"space-y-1.5 mb-2\">" + rewardRows + "</div>" + rwdPagination
                 + "<form onsubmit=\"saveRewardItem(event)\" class=\"border-t border-gray-100 pt-3 mt-2 space-y-2\">"
                 + "<p class=\"text-xs font-semibold text-gray-600 mb-2\">Tambah Reward Baru</p>"
                 + "<div><label class=\"text-[10px] font-medium text-gray-500 block mb-1\">Jenis / Nama Reward</label>"
@@ -3943,8 +3959,13 @@
             }
             html += "<div class=\"xl:col-span-3\">"
                 + "<div class=\"bg-white rounded-xl shadow-sm border border-gray-100\">"
-                + "<div class=\"p-4 border-b border-gray-100\"><h3 class=\"font-semibold text-gray-800\">Poin Aktif Pelanggan</h3>"
+                + "<div class=\"p-4 border-b border-gray-100\">"
+                + "<div class=\"flex flex-col sm:flex-row sm:items-center gap-3 justify-between\">"
+                + "<div><h3 class=\"font-semibold text-gray-800\">Poin Aktif Pelanggan</h3>"
                 + "<p class=\"text-xs text-gray-500\">Tukar poin aktif member menjadi diskon tunai atau reward. Poin akumulasi tidak berkurang saat penukaran.</p></div>"
+                + "<div class=\"relative min-w-[200px]\"><input type=\"text\" id=\"cust-poin-search-input\" placeholder=\"Cari nama atau ID member...\" value=\"" + (state.custPoinSearch||'') + "\" oninput=\"handleCustPoinSearch(event)\" class=\"w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-1 focus:ring-green-500 focus:outline-none\" /><i class=\"ph ph-magnifying-glass absolute left-2.5 top-2.5 text-gray-400 text-sm\"></i></div>"
+                + "</div></div>"
+                + "<div id=\"cust-poin-table-container\">"
                 + "<div class=\"overflow-x-auto\"><table class=\"w-full text-left border-collapse text-sm\"><thead>"
                 + "<tr class=\"bg-gray-50 text-gray-500 text-xs border-b border-gray-200\">"
                 + "<th class=\"py-3 px-4 font-medium\">Pelanggan</th>"
@@ -3952,14 +3973,176 @@
                 + "<th class=\"py-3 px-4 font-medium text-center text-green-600\">Poin Aktif</th>"
                 + "<th class=\"py-3 px-4 font-medium text-center\">Total Belanja</th>"
                 + "<th class=\"py-3 px-4 font-medium\">Tukar Poin</th>"
-                + "</tr></thead><tbody>" + custRows + "</tbody></table></div>"
-                + custPagination
+                + "</tr></thead><tbody id=\"cust-poin-tbody\">" + custRows + "</tbody></table></div>"
+                + "<div class=\"cust-poin-pagination\">" + custPagination + "</div>"
+                + "</div>"
                 + "</div></div>";
             html += "</div></div>";
             return html;
         }
 
-        function getFilteredSales(filterOverride) {
+        // ── PENCARIAN & PARTIAL RENDER: DAFTAR REWARD ────────────────
+        function handleRewardSearch(e) {
+            state.rewardSearch = e.target.value;
+            state.rewardListPage = 1;
+            renderRewardListOnly();
+        }
+
+        function renderRewardListOnly() {
+            var container = document.getElementById('reward-list-container');
+            if (!container) { renderContent(); return; }
+            var inp = document.activeElement;
+            var cursorPos = (inp && inp.id === 'reward-search-input') ? inp.selectionStart : null;
+
+            var q = (state.rewardSearch || '').toLowerCase().trim();
+            var filtered = rewardData.rewardList.filter(function(r) {
+                return !q || r.name.toLowerCase().includes(q) || (r.deskripsi && r.deskripsi.toLowerCase().includes(q));
+            });
+
+            var rwdPP = 5;
+            var rwdTotal = Math.max(1, Math.ceil(filtered.length / rwdPP));
+            if (state.rewardListPage > rwdTotal) state.rewardListPage = rwdTotal;
+            var rwdStart = (state.rewardListPage - 1) * rwdPP;
+            var rwdShown = filtered.slice(rwdStart, rwdStart + rwdPP);
+
+            // Rebuild reward rows
+            var html = '';
+            if (rwdShown.length === 0) {
+                html = '<p class="text-xs text-gray-400 italic py-1">' + (q ? 'Tidak ada reward cocok dengan pencarian.' : 'Belum ada reward.') + '</p>';
+            } else {
+                rwdShown.forEach(function(r) {
+                    // Cari index asli di rewardData.rewardList (bukan index filtered)
+                    var realIdx = rewardData.rewardList.indexOf(r);
+                    html += '<div class="flex items-center justify-between bg-purple-50 border border-purple-100 rounded-lg px-3 py-2 text-sm">'
+                        + '<div class="min-w-0"><span class="font-semibold text-purple-800 block truncate">' + r.name + '</span>'
+                        + '<span class="text-xs text-purple-600">' + r.poinDibutuhkan + ' poin' + (r.deskripsi ? ' &middot; ' + r.deskripsi : '') + '</span></div>'
+                        + '<div class="flex items-center gap-1 ml-2 shrink-0">'
+                        + '<button onclick="openEditRewardItem(' + realIdx + ')" title="Edit" class="p-1 text-purple-500 hover:text-purple-700 hover:bg-purple-100 rounded transition-colors"><i class="ph ph-pencil-simple text-sm"></i></button>'
+                        + '<button onclick="deleteRewardItem(' + realIdx + ')" title="Hapus" class="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"><i class="ph ph-trash text-sm"></i></button>'
+                        + '</div></div>';
+                });
+            }
+            container.innerHTML = html;
+
+            // Update pagination di bawah container
+            var paginationEl = container.nextElementSibling;
+            if (paginationEl && paginationEl.tagName !== 'FORM') {
+                // Cari elemen pagination reward (div setelah container)
+                var parent = container.parentNode;
+                var existingPag = parent.querySelector('.reward-pagination');
+                if (!existingPag) {
+                    existingPag = document.createElement('div');
+                    existingPag.className = 'reward-pagination';
+                    container.insertAdjacentElement('afterend', existingPag);
+                }
+                if (rwdTotal > 1) {
+                    existingPag.innerHTML = '<div class="flex justify-between items-center mt-2">'
+                        + '<button onclick="state.rewardListPage--; renderRewardListOnly()" ' + (state.rewardListPage===1?'disabled':'') + ' class="text-xs px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-40">Prev</button>'
+                        + '<span class="text-xs text-gray-400">' + state.rewardListPage + '/' + rwdTotal + '</span>'
+                        + '<button onclick="state.rewardListPage++; renderRewardListOnly()" ' + (state.rewardListPage===rwdTotal?'disabled':'') + ' class="text-xs px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-40">Next</button>'
+                        + '</div>';
+                } else {
+                    existingPag.innerHTML = '';
+                }
+            }
+
+            // Restore fokus
+            var searchInput = document.getElementById('reward-search-input');
+            if (searchInput && cursorPos !== null) {
+                searchInput.focus();
+                try { searchInput.setSelectionRange(cursorPos, cursorPos); } catch(ex) {}
+            }
+        }
+
+        // ── PENCARIAN & PARTIAL RENDER: TABEL POIN AKTIF PELANGGAN ───
+        function handleCustPoinSearch(e) {
+            state.custPoinSearch = e.target.value;
+            state.custPoinPage = 1;
+            renderCustPoinTableOnly();
+        }
+
+        function renderCustPoinTableOnly() {
+            var container = document.getElementById('cust-poin-table-container');
+            if (!container) { renderContent(); return; }
+            var inp = document.activeElement;
+            var cursorPos = (inp && inp.id === 'cust-poin-search-input') ? inp.selectionStart : null;
+
+            var q = (state.custPoinSearch || '').toLowerCase().trim();
+            var filtered = rewardData.customers.filter(function(c) {
+                return !q || c.name.toLowerCase().includes(q) || (c.id && c.id.toLowerCase().includes(q));
+            });
+
+            var custPP = 5;
+            var custTotal = Math.max(1, Math.ceil(filtered.length / custPP));
+            if (state.custPoinPage > custTotal) state.custPoinPage = custTotal;
+            var custShown = filtered.slice((state.custPoinPage - 1) * custPP, state.custPoinPage * custPP);
+
+            var tbody = container.querySelector('#cust-poin-tbody');
+            if (tbody) {
+                if (filtered.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="text-center py-10 text-gray-400">'
+                        + (q ? 'Tidak ada pelanggan cocok dengan pencarian.' : 'Belum ada pelanggan terdaftar.')
+                        + '</td></tr>';
+                } else {
+                    tbody.innerHTML = custShown.map(function(c) {
+                        var tier = getTierInfo(c.poin||0);
+                        var tierIdx = rewardData.tiers.findIndex(function(t){ return t.name===tier.name; });
+                        var nextTier = rewardData.tiers[tierIdx+1];
+                        var pct = (nextTier && nextTier.min>0) ? Math.min(100, Math.round(((c.poin||0)/nextTier.min)*100)) : 100;
+                        var progText = nextTier
+                            ? '<p class="text-[10px] text-gray-400">' + (nextTier.min-(c.poin||0)) + ' lagi ke ' + nextTier.name + '</p>'
+                            : '<p class="text-[10px] text-yellow-600 font-bold">Tier Tertinggi!</p>';
+                        var rewardBtns = '';
+                        if (rewardData.rewardList.length > 0) {
+                            rewardBtns = '<div class="flex flex-wrap gap-1 mt-1">';
+                            rewardData.rewardList.forEach(function(r) {
+                                var canRedeem = (c.poin||0) >= r.poinDibutuhkan;
+                                rewardBtns += '<button onclick="redeemRewardItem(\'' + c.id + '\',\'' + r.id + '\')" '
+                                    + (!canRedeem ? 'disabled ' : '')
+                                    + 'class="px-2 py-1 text-xs font-semibold rounded-lg border transition-colors '
+                                    + (canRedeem ? 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100">' : 'bg-gray-50 text-gray-400 border-gray-200 cursor-not-allowed">')
+                                    + '<i class="ph ph-gift text-xs"></i> ' + r.name + ' (' + r.poinDibutuhkan + ')'
+                                    + '</button>';
+                            });
+                            rewardBtns += '</div>';
+                        }
+                        return '<tr class="border-b border-gray-100 hover:bg-gray-50/50">'
+                            + '<td class="py-3 px-4"><p class="font-medium text-sm text-gray-800">' + c.name + '</p><p class="text-xs text-gray-400 font-mono">' + c.id + '</p></td>'
+                            + '<td class="py-3 px-4 text-center"><span class="px-2.5 py-1 rounded-full text-xs font-bold ' + tier.color + '">' + tier.name + '</span></td>'
+                            + '<td class="py-3 px-4 text-center"><span class="text-base font-bold text-green-600">' + ((c.poin||0).toLocaleString('id-ID')) + '</span>'
+                            + '<div class="w-full bg-gray-200 rounded-full h-1.5 mt-1"><div class="bg-green-500 h-1.5 rounded-full" style="width:' + pct + '%"></div></div>' + progText + '</td>'
+                            + '<td class="py-3 px-4 text-center text-sm text-gray-600">' + formatRp(c.totalBelanja||0) + '</td>'
+                            + '<td class="py-3 px-4">'
+                            + '<button onclick="redeemPoints(\'' + c.id + '\')" class="px-2.5 py-1 bg-green-50 text-green-700 text-xs font-semibold rounded-lg hover:bg-green-100 border border-green-200 flex items-center gap-1 mb-1"><i class="ph ph-currency-circle-dollar text-sm"></i> Tukar Diskon</button>'
+                            + rewardBtns
+                            + '</td></tr>';
+                    }).join('');
+                }
+            }
+
+            // Update pagination
+            var paginationEl = container.querySelector('.cust-poin-pagination');
+            if (paginationEl) {
+                if (custTotal > 1) {
+                    paginationEl.innerHTML = '<div class="flex justify-between items-center px-4 py-3 border-t border-gray-100 bg-gray-50/50">'
+                        + '<button onclick="state.custPoinPage--; renderCustPoinTableOnly()" ' + (state.custPoinPage===1?'disabled':'') + ' class="px-3 py-1.5 border border-gray-200 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-100 disabled:opacity-50">&lsaquo; Prev</button>'
+                        + '<span class="text-xs text-gray-500">Hal ' + state.custPoinPage + ' dari ' + custTotal + ' &bull; ' + filtered.length + ' member</span>'
+                        + '<button onclick="state.custPoinPage++; renderCustPoinTableOnly()" ' + (state.custPoinPage===custTotal?'disabled':'') + ' class="px-3 py-1.5 border border-gray-200 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-100 disabled:opacity-50">Next &rsaquo;</button>'
+                        + '</div>';
+                } else {
+                    paginationEl.innerHTML = filtered.length > 0
+                        ? '<div class="px-4 py-2 text-xs text-gray-400 text-center">' + filtered.length + ' member</div>'
+                        : '';
+                }
+            }
+
+            // Restore fokus
+            var searchInput = document.getElementById('cust-poin-search-input');
+            if (searchInput && cursorPos !== null) {
+                searchInput.focus();
+                try { searchInput.setSelectionRange(cursorPos, cursorPos); } catch(ex) {}
+            }
+        }
             var filter = filterOverride || state.laporanFilter;
             var now = new Date();
             var result = [...state.salesHistory];
