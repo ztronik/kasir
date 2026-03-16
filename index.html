@@ -15,6 +15,9 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
 
+    <!-- Chart.js untuk grafik dashboard -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+
     <!-- Library HTML5 QrCode untuk Barcode Scanner -->
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 
@@ -107,6 +110,15 @@
                 </button>
                 <p class="text-center text-xs text-gray-400 mt-5">Z-TRONIK POS &bull; Sistem Kasir Digital</p>
             </div>
+        </div>
+    </div>
+
+    <!-- Login Loading Overlay -->
+    <div id="login-loading-overlay" style="display:none;position:fixed;inset:0;z-index:300;background:linear-gradient(135deg,#14532d 0%,#166534 40%,#15803d 70%,#16a34a 100%);flex-direction:column;align-items:center;justify-content:center;gap:20px;">
+        <div style="width:64px;height:64px;border:5px solid rgba(255,255,255,0.25);border-top-color:#fff;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+        <div style="text-align:center;">
+            <div id="login-loading-nama" style="color:#fff;font-size:22px;font-weight:900;letter-spacing:2px;margin-bottom:6px;">Z-TRONIK</div>
+            <div style="color:rgba(255,255,255,0.75);font-size:13px;letter-spacing:0.5px;">Memuat sistem, harap tunggu...</div>
         </div>
     </div>
 
@@ -209,7 +221,7 @@
                 <button onclick="document.getElementById('struk-preview-modal').classList.add('hidden')" class="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg"><i class="ph ph-x"></i></button>
             </div>
             <div class="p-4 overflow-y-auto max-h-[60vh]">
-                <div id="struk-preview-content" class="font-mono text-xs bg-gray-50 rounded-xl p-4 border border-gray-200 whitespace-pre-wrap leading-relaxed"></div>
+                <div id="struk-preview-content" class="font-mono bg-gray-50 rounded-xl p-3 border border-gray-200 whitespace-pre overflow-x-auto leading-snug" style="font-size:11.5px;letter-spacing:0"></div>
             </div>
             <div class="p-4 border-t border-gray-100 flex gap-3">
                 <button onclick="document.getElementById('struk-preview-modal').classList.add('hidden')" class="flex-1 py-2.5 border border-gray-200 text-gray-600 font-semibold rounded-xl hover:bg-gray-50">Tutup</button>
@@ -282,13 +294,29 @@
             if (!uname || !pwd) { err.textContent='Username dan password wajib diisi.'; err.classList.remove('hidden'); return; }
             if (uname === authAdmin.username && pwd === authAdmin.password) {
                 currentUser = { username: uname, role: 'admin', nama: 'Admin' };
-                showApp(); return;
+                showLoginLoading(function(){ showApp(); });
+                return;
             }
             var kar = authKaryawan.find(function(k){ return k.username===uname && k.password===pwd; });
-            if (kar) { currentUser = { username: uname, role: 'karyawan', nama: kar.nama }; showApp(); return; }
+            if (kar) {
+                currentUser = { username: uname, role: 'karyawan', nama: kar.nama };
+                showLoginLoading(function(){ showApp(); });
+                return;
+            }
             err.textContent = 'Username atau password salah.';
             err.classList.remove('hidden');
             document.getElementById('login-password').value = '';
+        }
+
+        function showLoginLoading(callback) {
+            var overlay = document.getElementById('login-loading-overlay');
+            var namaEl  = document.getElementById('login-loading-nama');
+            if (namaEl) namaEl.textContent = namaTokoStruk || 'Z-TRONIK';
+            if (overlay) overlay.style.display = 'flex';
+            setTimeout(function() {
+                if (overlay) overlay.style.display = 'none';
+                if (callback) callback();
+            }, 2000);
         }
 
         function showApp() {
@@ -330,17 +358,22 @@
                 'Apakah Anda yakin ingin keluar?\nSesi Anda akan diakhiri.',
                 'warning',
                 function() {
-                    currentUser = null;
-                    adminAmbilAlih = false;
-                    sessionStorage.removeItem('ztronik_session');
-                    // Reset state aktif
-                    state.activeMenu = 'Dashboard';
-                    document.getElementById('login-username').value = '';
-                    document.getElementById('login-password').value = '';
-                    document.getElementById('login-error').classList.add('hidden');
-                    document.getElementById('login-screen').style.display = 'flex';
-                    // Render ulang sidebar bersih (tanpa session)
-                    renderSidebarMenu();
+                    var overlay = document.getElementById('login-loading-overlay');
+                    var namaEl  = document.getElementById('login-loading-nama');
+                    if (namaEl) namaEl.textContent = 'Keluar...';
+                    if (overlay) overlay.style.display = 'flex';
+                    setTimeout(function() {
+                        if (overlay) overlay.style.display = 'none';
+                        currentUser = null;
+                        adminAmbilAlih = false;
+                        sessionStorage.removeItem('ztronik_session');
+                        state.activeMenu = 'Dashboard';
+                        document.getElementById('login-username').value = '';
+                        document.getElementById('login-password').value = '';
+                        document.getElementById('login-error').classList.add('hidden');
+                        document.getElementById('login-screen').style.display = 'flex';
+                        renderSidebarMenu();
+                    }, 2000);
                 }
             );
         }
@@ -553,7 +586,14 @@
                     }
                     if (data.adminLogin)   authAdmin    = data.adminLogin;
                     if (data.karyawanList) authKaryawan = data.karyawanList;
-                    if (data.salesHistory) state.salesHistory = data.salesHistory;
+                    if (data.salesHistory) {
+                        state.salesHistory = data.salesHistory.map(function(s) {
+                            if (!s.method && s.paymentMethod) s.method = s.paymentMethod;
+                            if (!s.member && s.customerName) s.member = s.customerName;
+                            if (!s.memberId && s.customerId) s.memberId = s.customerId;
+                            return s;
+                        });
+                    }
                     if (data.shiftAktif) {
                         clerekState.shiftId              = data.shiftAktif.id;
                         clerekState.shiftMulai           = data.shiftAktif.mulai;
@@ -574,12 +614,18 @@
                     if (data.riwayatShift)  clerekState.riwayatShift = data.riwayatShift;
                     if (data.mutasiKas)     clerekMutasiKas          = data.mutasiKas;
                     if (data.pengaturan) {
-                        if (data.pengaturan.qris_image)  qrisImageBase64 = data.pengaturan.qris_image;
-                        if (data.pengaturan.nama_toko)   namaTokoStruk   = data.pengaturan.nama_toko;
-                        if (data.pengaturan.alamat_toko) alamatTokoStruk = data.pengaturan.alamat_toko;
-                        if (data.pengaturan.no_hp_toko)  noHpTokoStruk   = data.pengaturan.no_hp_toko;
-                        if (data.pengaturan.footer_struk)footerStruk     = data.pengaturan.footer_struk;
-                        if (data.pengaturan.cancel_pwd)  cancelRefundPwd = data.pengaturan.cancel_pwd;
+                        var pen = data.pengaturan;
+                        if (pen.qris_image  !== undefined) qrisImageBase64 = pen.qris_image;
+                        if (pen.nama_toko   !== undefined && pen.nama_toko)   namaTokoStruk   = pen.nama_toko;
+                        if (pen.alamat_toko !== undefined) alamatTokoStruk = pen.alamat_toko;
+                        if (pen.no_hp_toko  !== undefined) {
+                            var hp = String(pen.no_hp_toko).trim();
+                            if (hp.startsWith('62')) hp = '0' + hp.slice(2);
+                            if (hp.startsWith('+62')) hp = '0' + hp.slice(3);
+                            noHpTokoStruk = hp;
+                        }
+                        if (pen.footer_struk !== undefined && pen.footer_struk) footerStruk = pen.footer_struk;
+                        if (pen.cancel_pwd  !== undefined && pen.cancel_pwd)  cancelRefundPwd = pen.cancel_pwd;
                     }
                     state.isLoading = false;
                     showToast('Data dimuat: ' + state.products.length + ' produk, ' + state.customers.length + ' pelanggan.', 'success');
@@ -966,6 +1012,11 @@
         // --- RENDERERS ---
         function renderSidebarMenu() {
             const menuList = document.getElementById('menu-list');
+            // Karyawan punya menu lebih sedikit — tambah padding bawah agar tidak kepotong
+            if (menuList) {
+                var isKaryawan = currentUser && currentUser.role !== 'admin';
+                menuList.style.paddingBottom = isKaryawan ? '60px' : '0px';
+            }
             const shiftAktif = clerekState.shiftMulai && !clerekState.shiftSelesai;
             menuList.innerHTML = getMenus().map(menu => {
                 const isActive   = state.activeMenu === menu.name;
@@ -1021,6 +1072,7 @@
             switch (state.activeMenu) {
                 case 'Dashboard':
                     contentArea.innerHTML = getDashboardHTML();
+                    setTimeout(renderDashboardChart, 50);
                     break;
                 case 'Penjualan':
                     contentArea.innerHTML = getPosHTML();
@@ -1156,7 +1208,7 @@
                             </div>
                             ${state.salesHistory.length === 0
                                 ? `<div class="h-48 flex items-center justify-center text-gray-400 text-sm">Belum ada transaksi tercatat.</div>`
-                                : `<div class="flex items-end gap-2 h-40">${bars}</div>`}
+                                : `<div style="position:relative;height:180px;"><canvas id="dashboard-sales-chart"></canvas></div>`}
                         </div>
 
                         <div class="space-y-5">
@@ -1183,6 +1235,43 @@
             `;
         }
 
+        function renderDashboardChart() {
+            var canvas = document.getElementById('dashboard-sales-chart');
+            if (!canvas) return;
+            var dayLabels = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
+            var today = new Date().toDateString();
+            var labels = [], totals = [], colors = [], borderColors = [];
+            for (var i = 6; i >= 0; i--) {
+                var d = new Date(); d.setDate(d.getDate() - i);
+                var ds = d.toDateString();
+                var total = state.salesHistory
+                    .filter(function(s){ return new Date(s.date).toDateString() === ds; })
+                    .reduce(function(sum, s){ return sum + s.total; }, 0);
+                var isToday = ds === today;
+                labels.push(dayLabels[d.getDay()] + (isToday ? ' ★' : ''));
+                totals.push(total);
+                colors.push(isToday ? 'rgba(22,163,74,0.85)' : 'rgba(134,239,172,0.7)');
+                borderColors.push(isToday ? '#15803d' : '#86efac');
+            }
+            if (window._dashboardChart) { window._dashboardChart.destroy(); }
+            window._dashboardChart = new Chart(canvas, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{ label: 'Omzet (Rp)', data: totals, backgroundColor: colors, borderColor: borderColors, borderWidth: 2, borderRadius: 6, borderSkipped: false }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    animation: { duration: 800, easing: 'easeOutQuart' },
+                    plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx){ return ' ' + formatRp(ctx.parsed.y); } } } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { font: { size: 11, weight: '600' }, color: '#6b7280' } },
+                        y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { font: { size: 10 }, color: '#9ca3af', callback: function(val){ if(val===0)return '0'; if(val>=1000000)return (val/1000000).toFixed(1)+'Jt'; if(val>=1000)return (val/1000).toFixed(0)+'K'; return val; } } }
+                    }
+                }
+            });
+        }
+
         function navigateTo(menu) {
             setActiveMenu(menu);
         }
@@ -1194,7 +1283,7 @@
                          + ' ' + now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
             const categories = [...new Set(state.products.map(p => p.category))];
             return `
-            <div id="pos-wrapper" style="display:flex;flex-direction:column;height:calc(100vh - 64px - 2rem);background:#f0fdf4;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.1);">
+            <div id="pos-wrapper" style="display:flex;flex-direction:column;min-height:calc(100vh - 64px - 2rem);background:#f0fdf4;border-radius:10px;overflow:visible;box-shadow:0 2px 12px rgba(0,0,0,.1);">
                 <!-- HEADER -->
                 <div style="background:#16a34a;color:#fff;padding:8px 16px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
                     <div>
@@ -1227,10 +1316,10 @@
                 </div>
 
                 <!-- MAIN AREA -->
-                <div style="display:flex;flex:1;min-height:0;" id="pos-main">
+                <div style="display:flex;flex:1;" id="pos-main">
                     <!-- LEFT: Produk panel -->
                     <div id="pos-panel-produk" style="flex:1;display:flex;flex-direction:column;min-width:0;background:#fff;border-right:2px solid #16a34a;">
-                        <div style="flex:1;overflow-y:auto;">
+                        <div style="overflow-y:auto;min-height:calc(4 * 34px + 38px);max-height:calc(4 * 34px + 38px);flex-shrink:0;">
                             <table style="width:100%;border-collapse:collapse;font-size:12px;">
                                 <thead>
                                     <tr style="background:#dcfce7;position:sticky;top:0;z-index:2;">
@@ -1269,11 +1358,11 @@
                                 ${categories.map(c=>`<option value="${c}" ${state.posCategory===c?'selected':''}>${c}</option>`).join('')}
                             </select>
                         </div>
-                        <div id="pos-product-grid" style="flex-shrink:0;background:#fafafa;"></div>
+                        <div id="pos-product-grid" style="background:#fafafa;flex-shrink:0;min-height:calc(5*42px + 32px);"></div>
                     </div>
                     <!-- RIGHT: Keranjang panel -->
-                    <div id="pos-panel-keranjang" style="flex:1;min-width:0;background:#f8fafc;display:flex;flex-direction:column;overflow-y:auto;">
-                        <div id="pos-cart-footer" style="flex:1;padding:10px;display:flex;flex-direction:column;gap:6px;"></div>
+                    <div id="pos-panel-keranjang" style="flex:1;min-width:0;background:#f8fafc;display:flex;flex-direction:column;overflow:visible;">
+                        <div id="pos-cart-footer" style="flex:1;padding:10px;display:flex;flex-direction:column;gap:6px;overflow:visible;"></div>
                     </div>
                 </div>
                 <!-- STATUS BAR -->
@@ -1666,7 +1755,7 @@
             var kasirNama = opts.kasir || (currentUser ? currentUser.nama : 'Admin');
             return '<div style="width:58mm;font-family:Courier New,Courier,monospace;font-size:10px;padding:4px;line-height:1.5">'
                 + '<div style="text-align:center;font-weight:bold;font-size:13px;margin-bottom:2px">' + opts.namaT + '</div>'
-                + (opts.alamatT ? '<div style="text-align:center;font-size:9px;white-space:pre-wrap">' + opts.alamatT + '</div>' : '')
+                + (opts.alamatT ? '<div style="text-align:center;font-size:9px">' + opts.alamatT + '</div>' : '')
                 + (opts.telp    ? '<div style="text-align:center;font-size:9px;margin-bottom:2px">Telp: ' + opts.telp + '</div>' : '')
                 + '<div style="border-top:1px dashed #000;margin:4px 0"></div>'
                 + '<div style="display:flex;justify-content:space-between"><span>No. Trx</span><span>' + opts.noTrx + '</span></div>'
@@ -1697,11 +1786,11 @@
             var itemsHtml = state.cart.map(function(item) {
                 var p     = getItemActivePrice(item);
                 var total = p * item.qty;
-                var name  = item.name.length > 20 ? item.name.slice(0,20) : item.name;
-                return '<div style="font-weight:500">' + name + '</div>'
-                     + '<div style="display:flex;justify-content:space-between;padding-left:4px">'
-                     + '<span>&nbsp;&nbsp;' + item.qty + ' x ' + formatRp(p) + '</span>'
-                     + '<span>' + formatRp(total) + '</span></div>';
+                var name  = item.name.length > 24 ? item.name.slice(0,23) + '…' : item.name;
+                return '<div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + name + '</div>'
+                     + '<div style="display:flex;justify-content:space-between;align-items:baseline;padding-left:4px">'
+                     + '<span style="white-space:nowrap">&nbsp;' + item.qty + ' x ' + formatRp(p) + '</span>'
+                     + '<span style="flex-shrink:0;white-space:nowrap;padding-left:2px">' + formatRp(total) + '</span></div>';
             }).join('');
 
             var subtotal = state.cart.reduce(function(s, i){ return s + getItemActivePrice(i) * i.qty; }, 0);
@@ -1766,7 +1855,7 @@
                 const low = p.stock <= p.minStock;
                 const isMobile = window.innerWidth <= 767;
                 return `<button onclick="addToCart('${p.id}')"
-                    style="display:flex;align-items:center;justify-content:space-between;width:100%;padding:${isMobile?'9px 10px':'5px 8px'};background:#fff;border:none;border-bottom:1px solid #f0fdf4;cursor:pointer;text-align:left;box-sizing:border-box;"
+                    style="display:flex;align-items:center;justify-content:space-between;width:100%;padding:${isMobile?'9px 10px':'7px 8px'};background:#fff;border:none;border-bottom:1px solid #f0fdf4;cursor:pointer;text-align:left;box-sizing:border-box;min-height:${isMobile?'auto':'42px'};"
                     onmouseover="this.style.background='#f0fdf4'" onmouseout="this.style.background='#fff'">
                     <div style="min-width:0;flex:1;">
                         <div style="font-size:${isMobile?'12px':'11px'};font-weight:600;color:#1f2937;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:${isMobile?'150px':'130px'};">${p.name}</div>
@@ -2544,7 +2633,10 @@
         function saveTokoSettings() {
             namaTokoStruk   = document.getElementById('set-namatoko').value.trim() || 'Z-TRONIK';
             alamatTokoStruk = document.getElementById('set-alamat').value.trim();
-            noHpTokoStruk   = document.getElementById('set-nohp').value.trim();
+            var _hp = document.getElementById('set-nohp').value.trim();
+            if (_hp.startsWith('+62')) _hp = '0' + _hp.slice(3);
+            else if (_hp.startsWith('62') && _hp.length >= 10) _hp = '0' + _hp.slice(2);
+            noHpTokoStruk   = _hp;
             footerStruk     = document.getElementById('set-footer').value.trim() || 'Terima kasih!';
             if (GAS_URL) {
                 Promise.all([
@@ -3715,11 +3807,13 @@
 
             var itemLines = '';
             s.items.forEach(function(it) {
-                var nama  = it.name.length > W ? it.name.slice(0, W) : it.name;
+                var nama  = it.name.length > W ? it.name.slice(0, W-1) + '…' : it.name;
                 var harga = formatRp(it.price).replace('Rp\u00a0','Rp ');
                 var tot   = formatRp(it.total).replace('Rp\u00a0','Rp ');
                 itemLines += nama + '\n';
-                itemLines += padL('  ' + it.qty + ' x ' + harga, tot) + '\n';
+                var qtyHarga = '  ' + it.qty + ' x ' + harga;
+                if (qtyHarga.length + tot.length + 1 > W) qtyHarga = '  ' + it.qty + ' x ' + harga.replace('Rp ','');
+                itemLines += padL(qtyHarga, tot) + '\n';
             });
 
             var subtotalVal = s.items.reduce(function(a,b){ return a+b.total; }, 0);
@@ -3731,11 +3825,31 @@
                 memberLine = padL('Member', mn) + '\n' + padL('ID Member', maskMemberId(s.memberId||'')) + '\n';
             }
 
+            function centerLine(str) {
+                var s2 = str.length > W ? str.slice(0, W-1) + '…' : str;
+                var pad = Math.max(0, Math.floor((W - s2.length) / 2));
+                return Array(pad + 1).join(' ') + s2;
+            }
+            var namaLine = centerLine(namaTokoStruk);
+            var alamatLines = '';
+            if (alamatTokoStruk) {
+                alamatLines = alamatTokoStruk.split('\n').map(function(l){
+                    return centerLine(l.trim()) + '\n';
+                }).join('');
+            }
+            var telLine = noHpTokoStruk ? centerLine('Telp: ' + noHpTokoStruk) + '\n' : '';
+            var tunaiLines = '';
+            if ((s.method || s.paymentMethod || '') === 'Tunai' && s.bayar) {
+                tunaiLines = padL('Tunai', formatRp(s.bayar).replace('Rp\u00a0','Rp ')) + '\n'
+                           + padL('Kembali', formatRp(s.kembalian||0).replace('Rp\u00a0','Rp ')) + '\n';
+            }
+            var footerLines = footerStruk.split('\n').map(function(l){ return centerLine(l.trim()); }).join('\n');
+
             var preview =
                 '================================\n' +
-                '         ' + namaTokoStruk + '\n' +
-                (alamatTokoStruk ? '  ' + alamatTokoStruk + '\n' : '') +
-                (noHpTokoStruk   ? '  Telp: ' + noHpTokoStruk + '\n' : '') +
+                namaLine + '\n' +
+                alamatLines +
+                telLine +
                 sep + '\n' +
                 padL('No. Trx', s.id) + '\n' +
                 padL('Tanggal', tgl)  + '\n' +
@@ -3748,12 +3862,10 @@
                 padL('Subtotal', formatRp(subtotalVal).replace('Rp\u00a0','Rp ')) + '\n' +
                 discLine + poinLine +
                 padL('TOTAL', formatRp(s.total).replace('Rp\u00a0','Rp ')) + '\n' +
-                padL('Metode', s.method) + '\n' +
+                tunaiLines +
+                padL('Metode', s.method || s.paymentMethod || 'Tunai') + '\n' +
                 sep + '\n' +
-                (function() {
-                    var lines = footerStruk.split('\n');
-                    return lines.map(function(l){ var pad = Math.max(0, Math.floor((W - l.length)/2)); return Array(pad+1).join(' ') + l; }).join('\n');
-                })() + '\n' +
+                footerLines + '\n' +
                 '================================';
 
             document.getElementById('struk-preview-content').innerText = preview;
@@ -3769,14 +3881,15 @@
             var jam = d.toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'});
 
             var itemsHtml = s.items.map(function(it) {
-                var nama = it.name.length > 20 ? it.name.slice(0,20) : it.name;
-                return '<div style="font-weight:500">' + nama + '</div>'
-                     + '<div style="display:flex;justify-content:space-between;padding-left:4px">'
-                     + '<span>&nbsp;&nbsp;' + it.qty + ' x ' + formatRp(it.price) + '</span>'
-                     + '<span>' + formatRp(it.total) + '</span></div>';
+                var nama = it.name.length > 24 ? it.name.slice(0,23) + '…' : it.name;
+                return '<div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + nama + '</div>'
+                     + '<div style="display:flex;justify-content:space-between;align-items:baseline;padding-left:4px">'
+                     + '<span style="white-space:nowrap">&nbsp;' + it.qty + ' x ' + formatRp(it.price) + '</span>'
+                     + '<span style="flex-shrink:0;white-space:nowrap;padding-left:2px">' + formatRp(it.total) + '</span></div>';
             }).join('');
 
             var subtotalVal = s.items.reduce(function(a,b){ return a+b.total; }, 0);
+            var metodeBayar = s.method || s.paymentMethod || 'Tunai';
 
             var html = buildStruHtml({
                 namaT:       namaTokoStruk,
@@ -3786,8 +3899,8 @@
                 noTrx:       s.id,
                 tgl:         tgl,
                 jam:         jam,
-                memberName:  s.member || '',
-                memberId:    s.memberId || '',
+                memberName:  s.member || s.customerName || '',
+                memberId:    s.memberId || s.customerId || '',
                 itemsHtml:   itemsHtml,
                 subtotal:    subtotalVal,
                 subtotalFmt: formatRp(subtotalVal),
@@ -3798,19 +3911,29 @@
                 poinRedeem:  s.poinRedeem || 0,
                 grandTotal:  s.total,
                 totalFmt:    formatRp(s.total),
-                method:      s.method,
-                received:    0,
-                receivedFmt: '',
-                change:      0,
-                changeFmt:   '',
+                method:      metodeBayar,
+                received:    s.bayar || 0,
+                receivedFmt: s.bayar ? formatRp(s.bayar) : '',
+                change:      s.kembalian || 0,
+                changeFmt:   s.kembalian ? formatRp(s.kembalian) : '',
                 footer:      footerStruk
             });
 
-            var w = window.open('', '_blank', 'width=300,height=600');
-            w.document.write('<html><body style="margin:0">' + html + '</body></html>');
-            w.document.close();
-            w.focus();
-            setTimeout(function() { w.print(); w.close(); }, 300);
+            var iframe = document.getElementById('struk-print-iframe');
+            if (!iframe) {
+                iframe = document.createElement('iframe');
+                iframe.id = 'struk-print-iframe';
+                iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:300px;height:600px;border:none;';
+                document.body.appendChild(iframe);
+            }
+            var doc = iframe.contentDocument || iframe.contentWindow.document;
+            doc.open();
+            doc.write('<!DOCTYPE html><html><head><style>@media print { body { margin:0; } }</style></head><body style="margin:0">' + html + '</body></html>');
+            doc.close();
+            setTimeout(function() {
+                iframe.contentWindow.focus();
+                iframe.contentWindow.print();
+            }, 300);
         }
         function downloadTrxPDF(trxId) {
             var s = state.salesHistory.find(function(x){ return x.id === trxId; });
@@ -4726,6 +4849,12 @@
 
         function clerekMulaiShift() {
             showConfirm('Mulai Shift','Konfirmasi mulai shift sekarang?','info', function(){
+                var overlay = document.getElementById('login-loading-overlay');
+                var namaEl  = document.getElementById('login-loading-nama');
+                if (namaEl) namaEl.textContent = 'Membuka Shift...';
+                if (overlay) overlay.style.display = 'flex';
+                setTimeout(function() {
+                if (overlay) overlay.style.display = 'none';
                 var idShift = 'SHF' + Date.now();
                 var mulai   = Date.now();
                 var kasAwal = clerekState.kasAwal || 0;
@@ -4756,11 +4885,18 @@
                     renderSidebarMenu();
                     showToast('Shift dimulai! Selamat bekerja.','success');
                 }
+                }, 2000); // end setTimeout loading
             });
         }
 
         function clerekSelesaiShift() {
             showConfirm('Akhiri Shift','Yakin ingin mengakhiri shift sekarang?','warning', function(){
+                var overlay = document.getElementById('login-loading-overlay');
+                var namaEl  = document.getElementById('login-loading-nama');
+                if (namaEl) namaEl.textContent = 'Menutup Shift...';
+                if (overlay) overlay.style.display = 'flex';
+                setTimeout(function() {
+                if (overlay) overlay.style.display = 'none';
                 var selesai = Date.now();
                 var omzetShift = state.salesHistory.filter(function(s) {
                     var t = new Date(s.date).getTime();
@@ -4798,6 +4934,7 @@
                     renderContent();
                     showToast('Shift selesai.','success');
                 }
+                }, 2000); // end setTimeout loading
             });
         }
 
