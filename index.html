@@ -2161,6 +2161,8 @@
                 box.innerHTML = buildTunaiHTML(grandTotal, earnedPoin);
             } else if (state.paymentMethod === 'QRIS') {
                 box.innerHTML = buildQrisHTML(grandTotal, earnedPoin);
+            } else if (state.paymentMethod === 'Hutang') {
+                box.innerHTML = buildHutangHTML(grandTotal);
             } else {
                 box.innerHTML = buildKartuHTML(grandTotal);
             }
@@ -2269,6 +2271,51 @@
                 </div>`;
         }
 
+        function buildHutangHTML(grandTotal) {
+            // Cek apakah pelanggan sudah dipilih
+            if (!state.posActiveMember) {
+                return `
+                    <div class="p-6">
+                        <div class="flex items-center justify-between mb-5">
+                            <h3 class="text-lg font-bold text-gray-800 flex items-center gap-2"><i class="ph ph-hand-coins text-red-600 text-xl"></i> Pembayaran Hutang</h3>
+                            <button onclick="closePaymentModal()" class="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg"><i class="ph ph-x text-lg"></i></button>
+                        </div>
+                        <div class="bg-red-50 border border-red-100 rounded-xl p-5 text-center mb-5">
+                            <i class="ph ph-warning text-5xl text-red-400 mb-3"></i>
+                            <p class="text-lg font-bold text-red-700 mb-2">Member Harus Dipilih</p>
+                            <p class="text-sm text-red-600">Pembayaran hutang hanya dapat dilakukan untuk member yang sudah dipilih.</p>
+                        </div>
+                        <div class="flex gap-3">
+                            <button onclick="closePaymentModal()" class="flex-1 py-3 bg-gray-100 text-gray-600 font-semibold rounded-xl hover:bg-gray-200 transition-colors">Tutup</button>
+                        </div>
+                    </div>`;
+            }
+
+            return `
+                <div class="p-6">
+                    <div class="flex items-center justify-between mb-5">
+                        <h3 class="text-lg font-bold text-gray-800 flex items-center gap-2"><i class="ph ph-hand-coins text-red-600 text-xl"></i> Pembayaran Hutang</h3>
+                        <button onclick="closePaymentModal()" class="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg"><i class="ph ph-x text-lg"></i></button>
+                    </div>
+                    <div class="bg-red-50 border border-red-100 rounded-xl p-5 text-center mb-5">
+                        <i class="ph ph-hand-coins text-5xl text-red-400 mb-3"></i>
+                        <p class="text-2xl font-bold text-red-700 mb-2">${formatRp(grandTotal)}</p>
+                        <p class="text-sm text-red-600">Pembayaran hutang untuk ${state.posActiveMember.name}</p>
+                        <p class="text-xs text-gray-500 mt-2">Masukkan password untuk verifikasi transaksi hutang.</p>
+                    </div>
+                    <div class="mb-4">
+                        <label class="block text-sm font-semibold text-gray-700 mb-2">Password Verifikasi Hutang</label>
+                        <input type="password" id="hutang-pwd-input" placeholder="Masukkan password..." class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-sm" />
+                    </div>
+                    <div class="flex gap-3">
+                        <button onclick="closePaymentModal()" class="flex-1 py-3 border border-gray-200 text-gray-600 font-semibold rounded-xl hover:bg-gray-50 transition-colors">Batal</button>
+                        <button onclick="verifyHutangPassword(${grandTotal})" class="flex-1 py-3 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 transition-colors flex items-center justify-center gap-2">
+                            <i class="ph ph-check-circle text-lg"></i> Konfirmasi Pembayaran
+                        </button>
+                    </div>
+                </div>`;
+        }
+
         function calcChange(total) {
             const inp = document.getElementById('pay-cash-input');
             if (!inp) return;
@@ -2287,6 +2334,110 @@
             const rounded = Math.ceil(total / val) * val;
             inp.value = rounded;
             calcChange(total);
+        }
+
+        function verifyHutangPassword(grandTotal) {
+            const pwd = (document.getElementById('hutang-pwd-input')?.value || '').trim();
+            
+            if (!pwd) {
+                showAlert('Password Kosong', 'Masukkan password terlebih dahulu.', 'warning');
+                return;
+            }
+            
+            if (pwd !== cancelRefundPwd) {
+                showAlert('Password Salah', 'Password yang Anda masukkan tidak sesuai.', 'error');
+                document.getElementById('hutang-pwd-input').value = '';
+                return;
+            }
+            
+            // Password benar, lanjut proses pembayaran hutang
+            closePaymentModal();
+            processHutangPayment(grandTotal);
+        }
+
+        function processHutangPayment(grandTotal) {
+            const cust = state.posActiveMember;
+            if (!cust) {
+                showAlert('Error', 'Member tidak ditemukan.', 'error');
+                return;
+            }
+
+            // Buat record pembayaran hutang di sheet HutangPiutang
+            const hutangId = 'HT-' + new Date().getTime();
+            const now = new Date();
+            const tglStr = Utilities.formatDate(now, Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss');
+            
+            const hutangRecord = {
+                id: hutangId,
+                tipe: 'pelanggan',
+                nama: cust.name,
+                idPelanggan: cust.id,
+                keterangan: 'Pembayaran Hutang - Penjualan',
+                jumlah: grandTotal,
+                sudahDibayar: grandTotal,
+                tanggal: now.toISOString(),
+                jatuhTempo: now.toISOString(),
+                status: 'pembayaran_dicatat',
+                kasir: state.currentUser?.name || 'Operator',
+                catatanTrx: 'Pembayaran hutang dari transaksi penjualan',
+                riwayatBayar: JSON.stringify([{tanggal: now.toISOString(), jumlah: grandTotal, catatan: 'Pembayaran'}])
+            };
+
+            // Simpan ke GAS
+            if (GAS_URL) {
+                gasPost({ 
+                    action: 'savePembayaranHutang', 
+                    hutangRecord: hutangRecord 
+                }).catch(() => {});
+            }
+
+            // Catat di local data
+            hutangPiutangList.push(hutangRecord);
+
+            // Update total belanja pelanggan
+            const sc = state.customers.find(c => c.id === cust.id);
+            if (sc) {
+                sc.totalBelanja = (sc.totalBelanja || 0) + grandTotal;
+            }
+
+            // Buat struk penjualan
+            const saleRecord = {
+                id: generateTransactionId(),
+                tanggal: now,
+                kasir: state.currentUser?.name || 'Operator',
+                items: state.cart,
+                subtotal: grandTotal,
+                metode: 'Hutang',
+                bayar: 0,
+                kembalian: 0,
+                diskon: 0,
+                idPelanggan: cust.id,
+                namaPelanggan: cust.name,
+                poinDipakai: state.posPoinRedeem || 0,
+                poinDidapat: 0
+            };
+
+            // Simpan transaksi ke GAS
+            if (GAS_URL) {
+                gasPost({
+                    action: 'savePenjualan',
+                    saleRecord: saleRecord
+                }).catch(() => {});
+            }
+
+            // Kosongkan cart
+            state.cart = [];
+            state.discountValue = 0;
+            state.posPoinRedeem = 0;
+            state.posActiveMember = null;
+            state.paymentMethod = 'Tunai';
+
+            renderCart();
+            renderContent();
+            
+            showAlert('Pembayaran Hutang Tercatat', 
+                'Pembayaran hutang sebesar ' + formatRp(grandTotal) + ' untuk ' + cust.name + ' telah berhasil dicatat.\\nSilakan cek menu Hutang/Piutang untuk detail lebih lanjut.',
+                'success');
         }
 
         function processPayment(grandTotal) {
@@ -2691,8 +2842,10 @@
             const methods = [
                 {id:'Tunai', icon:'ph-money',       color:'#16a34a'},
                 {id:'Kartu', icon:'ph-credit-card', color:'#2563eb'},
-                {id:'QRIS',  icon:'ph-qr-code',     color:'#7c3aed'}
+                {id:'QRIS',  icon:'ph-qr-code',     color:'#7c3aed'},
+                {id:'Hutang', icon:'ph-hand-coins', color:'#dc2626'}
             ];
+
             const methodHtml = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;flex-shrink:0;">
                 ${methods.map(m=>`<button onclick="setPaymentMethod('${m.id}')"
                     style="padding:9px 4px;border:2px solid ${state.paymentMethod===m.id?m.color:'#e2e8f0'};background:${state.paymentMethod===m.id?m.color+'18':'#fff'};border-radius:8px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:11px;font-weight:700;color:${state.paymentMethod===m.id?m.color:'#6b7280'};">
@@ -3417,9 +3570,9 @@
                         <button onclick="saveAdminCredentials()" class="mt-4 px-4 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors text-sm flex items-center gap-2"><i class="ph ph-floppy-disk"></i> Simpan Kredensial Admin</button>
                     </div>
 
-                    <!-- Password Pembatalan Transaksi -->
+                    <!-- Password Verifikasi Transaksi (Pembatalan & Pembayaran Hutang) -->
                     <div class="bg-white rounded-xl shadow-sm border border-red-100 p-6">
-                        <h2 class="text-lg font-semibold text-gray-800 mb-1 flex items-center gap-2"><i class="ph ph-arrow-u-up-left text-red-500"></i> Password Pembatalan Transaksi</h2>
+                        <h2 class="text-lg font-semibold text-gray-800 mb-1 flex items-center gap-2"><i class="ph ph-lock text-blue-500"></i> Password Verifikasi Transaksi</h2>
                         <p class="text-xs text-gray-400 mb-4">Password ini digunakan untuk memverifikasi pembatalan transaksi di menu Laporan. Berlaku untuk semua pengguna (admin & karyawan).</p>
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
@@ -3441,7 +3594,7 @@
                         </div>
                         <div class="mt-3 p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-700 flex items-start gap-2">
                             <i class="ph ph-info shrink-0 mt-0.5"></i>
-                            <span>Password saat ini: <strong>${cancelRefundPwd}</strong> — Jaga kerahasiaan password ini. Hanya berikan ke orang yang berwenang membatalkan transaksi.</span>
+                            <span>Password saat ini: <strong>${cancelRefundPwd}</strong> — Digunakan untuk verifikasi pembatalan transaksi dan pembayaran hutang. Jaga kerahasiaan password ini, hanya berikan ke orang yang berwenang.</span>
                         </div>
                         <button onclick="saveCancelPassword()" class="mt-4 px-4 py-2 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 transition-colors text-sm flex items-center gap-2">
                             <i class="ph ph-floppy-disk"></i> Simpan Password Pembatalan
@@ -4701,12 +4854,19 @@
             var isAdmin = currentUser && currentUser.role === 'admin';
 
             // Tab bar — Neraca Modal hanya untuk admin
-            var tabTrxActive   = state.laporanTab !== 'neraca';
+            var tabTrxActive   = state.laporanTab !== 'neraca' && state.laporanTab !== 'hutang';
             var tabNrcActive   = state.laporanTab === 'neraca';
+            var tabHtgActive   = state.laporanTab === 'hutang';
             var tabBar = '<div class="flex gap-2 mb-4">'
-                + '<button onclick="state.laporanTab=\'transaksi\'; renderContent()" style="padding:8px 16px;font-size:13px;font-weight:600;border-radius:8px;border:1px solid ' + (tabTrxActive ? '#16a34a' : '#e5e7eb') + ';background:' + (tabTrxActive ? '#16a34a' : '#fff') + ';color:' + (tabTrxActive ? '#fff' : '#4b5563') + ';cursor:pointer;">'
+                + '<button onclick="state.laporanTab=\'transaksi\'; state.laporanPage=1; renderContent()" style="padding:8px 16px;font-size:13px;font-weight:600;border-radius:8px;border:1px solid ' + (tabTrxActive ? '#16a34a' : '#e5e7eb') + ';background:' + (tabTrxActive ? '#16a34a' : '#fff') + ';color:' + (tabTrxActive ? '#fff' : '#4b5563') + ';cursor:pointer;">'
                 + '<i class="ph ph-receipt" style="margin-right:6px;"></i>Riwayat Transaksi'
                 + '</button>';
+            
+            // Tab Hutang/Piutang untuk semua user
+            tabBar += '<button onclick="state.laporanTab=\'hutang\'; state.laporanPage=1; renderContent()" style="padding:8px 16px;font-size:13px;font-weight:600;border-radius:8px;border:1px solid ' + (tabHtgActive ? '#dc2626' : '#e5e7eb') + ';background:' + (tabHtgActive ? '#dc2626' : '#fff') + ';color:' + (tabHtgActive ? '#fff' : '#4b5563') + ';cursor:pointer;">'
+                + '<i class="ph ph-hand-coins" style="margin-right:6px;"></i>Hutang/Piutang'
+                + '</button>';
+            
             if (isAdmin) {
                 tabBar += '<button onclick="state.laporanTab=\'neraca\'; renderContent()" style="padding:8px 16px;font-size:13px;font-weight:600;border-radius:8px;border:1px solid ' + (tabNrcActive ? '#4f46e5' : '#e5e7eb') + ';background:' + (tabNrcActive ? '#4f46e5' : '#fff') + ';color:' + (tabNrcActive ? '#fff' : '#4b5563') + ';cursor:pointer;">'
                     + '<i class="ph ph-scales" style="margin-right:6px;"></i>Neraca Modal'
@@ -4714,6 +4874,11 @@
             }
             tabBar += '</div>';
 
+            // Route ke tab
+            if (tabHtgActive) {
+                return '<div class="space-y-4">' + tabBar + getLaporanHutangHTML() + '</div>';
+            }
+            
             // Route ke neraca tab
             if (isAdmin && tabNrcActive) {
                 return '<div class="space-y-4">' + tabBar + getNeracaModalHTML() + '</div>';
@@ -4910,6 +5075,176 @@
 
 
         // ── NERACA MODAL (admin only) ─────────────────────────────────
+        // ══════════════════════════════════════════════════════════════════════════════
+        // LAPORAN HUTANG/PIUTANG
+        // ══════════════════════════════════════════════════════════════════════════════
+        
+        function getLaporanHutangHTML() {
+            var tab = state.laporanHutangTab || 'pelanggan';
+            var q = (state.laporanHutangSearch || '').toLowerCase().trim();
+            var filterStatus = state.laporanHutangFilter || 'semua';
+            var today = new Date(); today.setHours(0,0,0,0);
+
+            // Filter list berdasarkan tab
+            var list = hutangPiutangList.filter(function(h){ return h.tipe === tab; });
+
+            // Filter status
+            if (filterStatus !== 'semua') {
+                list = list.filter(function(h){
+                    if (filterStatus === 'belum')    return h.status === 'belum';
+                    if (filterStatus === 'cicilan')  return h.status === 'cicilan';
+                    if (filterStatus === 'lunas')    return h.status === 'lunas';
+                    if (filterStatus === 'jatuh') {
+                        if (h.status === 'lunas' || !h.jatuhTempo) return false;
+                        var jt = new Date(h.jatuhTempo); jt.setHours(0,0,0,0);
+                        return jt <= today;
+                    }
+                    return true;
+                });
+            }
+
+            // Filter search
+            if (q) list = list.filter(function(h){
+                return h.nama.toLowerCase().includes(q) || h.keterangan.toLowerCase().includes(q);
+            });
+
+            // Sort
+            list.sort(function(a,b){
+                var order = {belum:0, cicilan:1, lunas:2};
+                var ao = order[a.status]||0, bo = order[b.status]||0;
+                if (ao !== bo) return ao - bo;
+                if (a.jatuhTempo && b.jatuhTempo) return new Date(a.jatuhTempo) - new Date(b.jatuhTempo);
+                return 0;
+            });
+
+            // Pagination
+            var perPage = 15;
+            var totalPages = Math.max(1, Math.ceil(list.length / perPage));
+            if (!state.laporanHutangPage) state.laporanHutangPage = 1;
+            if (state.laporanHutangPage > totalPages) state.laporanHutangPage = totalPages;
+            var shown = list.slice((state.laporanHutangPage-1)*perPage, state.laporanHutangPage*perPage);
+
+            // Summary
+            var allTab = hutangPiutangList.filter(function(h){ return h.tipe === tab; });
+            var totalHutang  = allTab.reduce(function(s,h){ return s+h.jumlah; },0);
+            var totalLunas   = allTab.reduce(function(s,h){ return s+h.sudahDibayar; },0);
+            var totalSisa    = totalHutang - totalLunas;
+            var jumlahAktif  = allTab.filter(function(h){ return h.status !== 'lunas'; }).length;
+
+            // Tab buttons
+            var tabs = [
+                { id:'pelanggan', label:'Hutang Pelanggan', icon:'ph-user', color:'#dc2626' },
+                { id:'supplier',  label:'Hutang Supplier',  icon:'ph-storefront', color:'#2563eb' }
+            ];
+            var tabHtml = tabs.map(function(t){
+                var active = tab === t.id;
+                return '<button onclick="state.laporanHutangTab=\''+t.id+'\';state.laporanHutangPage=1;renderContent();" '
+                    + 'style="display:flex;align-items:center;gap:6px;padding:9px 16px;border-radius:8px;font-size:13px;font-weight:'+(active?'700':'500')+';'
+                    + 'background:'+(active?t.color:'#f9fafb')+';color:'+(active?'#fff':'#6b7280')+';border:none;cursor:pointer;transition:all 0.15s;">'
+                    + '<i class="ph '+t.icon+' text-base"></i>' + t.label + '</button>';
+            }).join('');
+
+            // Status filter
+            var statusFilters = [
+                {k:'semua',   label:'Semua'},
+                {k:'belum',   label:'Belum Lunas'},
+                {k:'cicilan', label:'Cicilan'},
+                {k:'lunas',   label:'Lunas'},
+                {k:'jatuh',   label:'Jatuh Tempo'},
+            ];
+            var filterHtml = statusFilters.map(function(f){
+                var active = filterStatus === f.k;
+                var color = f.k==='jatuh' ? (active?'#dc2626':'#fecaca') : (active?'#16a34a':'#f3f4f6');
+                var textColor = f.k==='jatuh' ? (active?'#fff':'#dc2626') : (active?'#fff':'#6b7280');
+                return '<button onclick="state.laporanHutangFilter=\''+f.k+'\';state.laporanHutangPage=1;renderContent();" '
+                    + 'style="padding:5px 12px;border-radius:6px;font-size:11px;font-weight:600;background:'+color+';color:'+textColor+';border:none;cursor:pointer;">'
+                    + f.label + '</button>';
+            }).join('');
+
+            // Rows
+            var rowsHtml = '';
+            if (shown.length === 0) {
+                rowsHtml = '<tr><td colspan="7" style="padding:48px;text-align:center;color:#9ca3af;">'
+                    + '<i class="ph ph-handshake" style="font-size:40px;display:block;margin-bottom:8px;"></i>'
+                    + 'Tidak ada data hutang piutang.</td></tr>';
+            } else {
+                shown.forEach(function(h, idx){
+                    var sisa = h.jumlah - h.sudahDibayar;
+                    var pct = h.jumlah > 0 ? Math.round((h.sudahDibayar/h.jumlah)*100) : 0;
+                    var isOverdue = false;
+                    if (h.status !== 'lunas' && h.jatuhTempo) {
+                        var jt = new Date(h.jatuhTempo); jt.setHours(0,0,0,0);
+                        isOverdue = jt <= today;
+                    }
+                    var statusBadge = '';
+                    if (h.status === 'lunas') {
+                        statusBadge = '<span style="background:#dcfce7;color:#16a34a;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;">✓ Lunas</span>';
+                    } else if (h.status === 'cicilan') {
+                        statusBadge = '<span style="background:#fef3c7;color:#d97706;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;">Cicilan</span>';
+                    } else if (isOverdue) {
+                        statusBadge = '<span style="background:#fee2e2;color:#dc2626;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;">⚠ Jatuh Tempo</span>';
+                    } else {
+                        statusBadge = '<span style="background:#fce7f3;color:#9333ea;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;">Belum</span>';
+                    }
+                    var rowBg = isOverdue && h.status !== 'lunas' ? '#fff5f5' : (idx%2===0?'#fff':'#fafafa');
+                    rowsHtml += '<tr style="border-bottom:1px solid #f0f0f0;background:'+rowBg+';">'
+                        + '<td style="padding:10px 12px;font-size:12px;"><div style="font-weight:600;color:#1f2937;">'+h.nama+'</div>'
+                        + (h.idPelanggan ? '<div style="font-size:10px;color:#6b7280;font-family:monospace;">'+h.idPelanggan+'</div>' : '')
+                        + '</td>'
+                        + '<td style="padding:10px 12px;font-size:11px;color:#6b7280;max-width:150px;"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+h.keterangan+'">'+h.keterangan+'</div></td>'
+                        + '<td style="padding:10px 12px;text-align:right;font-size:12px;font-weight:600;">'+formatRp(h.jumlah)+'</td>'
+                        + '<td style="padding:10px 12px;text-align:right;font-size:12px;color:#16a34a;font-weight:600;">'+formatRp(h.sudahDibayar)+'</td>'
+                        + '<td style="padding:10px 12px;text-align:right;font-size:12px;font-weight:700;color:'+(sisa>0?'#dc2626':'#16a34a')+';">'+formatRp(sisa)+'</td>'
+                        + '<td style="padding:10px 12px;font-size:11px;color:'+(isOverdue&&h.status!=='lunas'?'#dc2626':'#6b7280')+';">'
+                        + statusBadge
+                        + (h.jatuhTempo ? '<div style="font-size:10px;margin-top:2px;">'+h.jatuhTempo+'</div>' : '')
+                        + '</td>'
+                        + '</tr>';
+                });
+            }
+
+            // Pagination
+            var paginationHtml = '';
+            if (totalPages > 1) {
+                paginationHtml = '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-top:1px solid #f0f0f0;">'
+                    + '<button onclick="state.laporanHutangPage--;renderContent();" '+(state.laporanHutangPage<=1?'disabled':'')+' style="padding:6px 14px;border:1px solid #e5e7eb;border-radius:7px;background:'+(state.laporanHutangPage<=1?'#f9fafb':'#fff')+';color:'+(state.laporanHutangPage<=1?'#d1d5db':'#374151')+';font-size:12px;font-weight:600;cursor:'+(state.laporanHutangPage<=1?'not-allowed':'pointer')+';">‹ Prev</button>'
+                    + '<span style="font-size:12px;color:#6b7280;">Hal '+state.laporanHutangPage+' dari '+totalPages+' · '+list.length+' data</span>'
+                    + '<button onclick="state.laporanHutangPage++;renderContent();" '+(state.laporanHutangPage>=totalPages?'disabled':'')+' style="padding:6px 14px;border:1px solid #e5e7eb;border-radius:7px;background:'+(state.laporanHutangPage>=totalPages?'#f9fafb':'#16a34a')+';color:'+(state.laporanHutangPage>=totalPages?'#d1d5db':'#fff')+';font-size:12px;font-weight:600;cursor:'+(state.laporanHutangPage>=totalPages?'not-allowed':'pointer')+';">Next ›</button>'
+                    + '</div>';
+            }
+
+            return '<div class="space-y-4">'
+                + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+                + tabHtml
+                + '</div>'
+                + '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+                + filterHtml
+                + '</div>'
+                + '<div style="display:flex;gap:3px;margin-bottom:12px;">'
+                + '<input type="text" placeholder="Cari nama, keterangan..." value="'+(state.laporanHutangSearch||'')+'" onkeyup="state.laporanHutangSearch=this.value; state.laporanHutangPage=1; renderContent();" style="flex:1;padding:8px 12px;border:1px solid #e5e7eb;border-radius:8px;font-size:13px;">'
+                + (state.laporanHutangSearch ? '<button onclick="state.laporanHutangSearch=\'\'; state.laporanHutangPage=1; renderContent();" style="padding:8px 12px;background:#fee2e2;color:#dc2626;border:none;border-radius:8px;cursor:pointer;">✕ Clear</button>' : '')
+                + '</div>'
+                + '<div style="overflow-x:auto;border:1px solid #e5e7eb;border-radius:8px;background:#fff;">'
+                + '<table style="width:100%;border-collapse:collapse;">'
+                + '<thead style="background:#f9fafb;">'
+                + '<tr style="border-bottom:2px solid #e5e7eb;">'
+                + '<th style="padding:12px;text-align:left;font-weight:600;color:#374151;font-size:12px;">Nama</th>'
+                + '<th style="padding:12px;text-align:left;font-weight:600;color:#374151;font-size:12px;">Keterangan</th>'
+                + '<th style="padding:12px;text-align:right;font-weight:600;color:#374151;font-size:12px;">Jumlah</th>'
+                + '<th style="padding:12px;text-align:right;font-weight:600;color:#374151;font-size:12px;">Sudah Bayar</th>'
+                + '<th style="padding:12px;text-align:right;font-weight:600;color:#374151;font-size:12px;">Sisa</th>'
+                + '<th style="padding:12px;text-align:left;font-weight:600;color:#374151;font-size:12px;">Status</th>'
+                + '</tr>'
+                + '</thead>'
+                + '<tbody>'
+                + rowsHtml
+                + '</tbody>'
+                + '</table>'
+                + '</div>'
+                + paginationHtml
+                + '</div>';
+        }
+
         function getNeracaModalHTML() {
             var now = new Date();
             var tglStr = now.toLocaleDateString('id-ID', { day:'2-digit', month:'long', year:'numeric' });
@@ -7392,7 +7727,8 @@
                         + '</td>'
                         + '<td style="padding:10px 12px;">'
                         + '<div style="display:flex;gap:4px;flex-wrap:wrap;">'
-                        + (h.status !== 'lunas' && !isKaryawan ? '<button onclick="openCicilanModal(\''+h.id+'\')" style="padding:4px 8px;background:#fef3c7;color:#d97706;border:none;border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;" title="Bayar/Cicil"><i class="ph ph-currency-circle-dollar"></i></button>' : '')
+                        + (h.status !== 'lunas' && !isKaryawan ? '<button onclick="prosesLunasHutang(\''+h.id+'\')" style="padding:4px 8px;background:#16a34a;color:#fff;border:none;border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;" title="Lunasi"><i class="ph ph-check-circle"></i></button>' : '')
+                        + (h.status !== 'lunas' && !isKaryawan ? '<button onclick="openCicilanModal(\''+h.id+'\')" style="padding:4px 8px;background:#fef3c7;color:#d97706;border:none;border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;" title="Cicil"><i class="ph ph-currency-circle-dollar"></i></button>' : '')
                         + (!isKaryawan ? '<button onclick="openDetailHutang(\''+h.id+'\')" style="padding:4px 8px;background:#eff6ff;color:#2563eb;border:none;border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;" title="Detail"><i class="ph ph-eye"></i></button>' : '')
                         + (!isKaryawan ? '<button onclick="hapusHutang(\''+h.id+'\')" style="padding:4px 8px;background:#fee2e2;color:#dc2626;border:none;border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;" title="Hapus"><i class="ph ph-trash"></i></button>' : '')
                         + (isKaryawan ? '<button onclick="openDetailHutang(\''+h.id+'\')" style="padding:4px 8px;background:#eff6ff;color:#2563eb;border:none;border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;" title="Lihat Detail"><i class="ph ph-eye"></i></button>' : '')
@@ -7563,6 +7899,58 @@
             }
             renderContent();
             showToast('Hutang berhasil ditambahkan!','success');
+        }
+
+        // ── LUNASI HUTANG PENUH ────────────────────────────
+        function prosesLunasHutang(id) {
+            var h = hutangPiutangList.find(function(x){ return x.id === id; });
+            if (!h) return;
+            
+            var sisa = h.jumlah - h.sudahDibayar;
+            if (sisa <= 0) {
+                showAlert('Hutang Sudah Lunas', 'Hutang ini sudah terlunas sepenuhnya.', 'info');
+                return;
+            }
+            
+            // Konfirmasi pelunasan
+            showConfirm('Lunasi Hutang?', 
+                'Lunasi hutang ' + h.nama + ' sebesar ' + formatRp(sisa) + '?\\n\\n'
+                + 'Status akan berubah menjadi \"Lunas\" dan riwayat pembayaran akan tercatat.',
+                'warning',
+                function() {
+                    // Proses pelunasan
+                    var now = new Date();
+                    var tglStr = Utilities.formatDate(now, Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm');
+                    
+                    // Update riwayat pembayaran
+                    if (!h.riwayatBayar) h.riwayatBayar = [];
+                    h.riwayatBayar.push({
+                        tanggal: now.toISOString(),
+                        tgl: tglStr,
+                        ket: 'Pelunasan Penuh',
+                        jumlah: sisa
+                    });
+                    
+                    // Update status hutang
+                    h.sudahDibayar = h.jumlah;
+                    h.status = 'lunas';
+                    
+                    // Sync ke GAS
+                    if (GAS_URL) {
+                        gasPost({
+                            action: 'updateHutang',
+                            id: h.id,
+                            hutangRecord: h
+                        }).catch(() => {});
+                    }
+                    
+                    renderContent();
+                    showAlert('Hutang Terlunas!',
+                        'Hutang ' + h.nama + ' sebesar ' + formatRp(sisa) + ' telah berhasil dilunas.\\n'
+                        + 'Status berubah menjadi \"Lunas\" dan tercatat di riwayat.',
+                        'success');
+                }
+            );
         }
 
         // ── MODAL CICILAN / BAYAR ──────────────────────────
