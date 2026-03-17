@@ -68,6 +68,9 @@
         }
         @keyframes spin { to { transform: rotate(360deg); } }
         .animate-spin { animation: spin 0.8s linear infinite; }
+        @media (max-width: 640px) {
+            .hutang-cards-grid { grid-template-columns: repeat(2,1fr) !important; }
+        }
     </style>
 </head>
 <body class="bg-gray-50 font-sans text-gray-800 flex min-h-screen">
@@ -293,6 +296,46 @@
 
         // --- HUTANG PIUTANG DATA ---
         var hutangPiutangList = []; // array semua record hutang (pelanggan + supplier)
+        var kategoriList      = []; // daftar kategori tersimpan (dari produk + tambahan manual)
+
+        // ── KATEGORI LIST — disimpan di sheet Pengaturan (key: kategori_list) ──
+        // loadKategoriList: gabungkan dari server (kategoriList sudah diisi
+        //   saat fetchData) dengan kategori dari produk yang ada.
+        function loadKategoriList() {
+            var fromProducts = state.products
+                .map(function(p){ return (p.category || '').trim(); })
+                .filter(function(k){ return k !== ''; });
+            // Gabungkan dengan yang sudah ada di kategoriList (dari server)
+            var merged = Array.from(new Set(fromProducts.concat(kategoriList)))
+                .filter(function(k){ return k.trim() !== ''; })
+                .sort(function(a, b){ return a.localeCompare(b, 'id'); });
+            kategoriList = merged;
+            return kategoriList;
+        }
+
+        function saveKategoriToList(nama) {
+            nama = nama.trim();
+            if (!nama) return;
+            loadKategoriList();
+            if (kategoriList.indexOf(nama) < 0) {
+                kategoriList.push(nama);
+                kategoriList.sort(function(a, b){ return a.localeCompare(b, 'id'); });
+            }
+            // Simpan ke spreadsheet via GAS (key: kategori_list)
+            if (GAS_URL) {
+                gasPost({ action: 'savePengaturan', key: 'kategori_list', value: JSON.stringify(kategoriList) })
+                    .catch(function(){});
+            }
+        }
+
+        function deleteKategoriFromList(nama) {
+            loadKategoriList();
+            kategoriList = kategoriList.filter(function(k){ return k !== nama; });
+            if (GAS_URL) {
+                gasPost({ action: 'savePengaturan', key: 'kategori_list', value: JSON.stringify(kategoriList) })
+                    .catch(function(){});
+            }
+        }
 
         // --- AUTH DATA (dimuat dari GAS saat fetchData) ---
         var authAdmin    = { username: 'user', password: 'user13' };
@@ -479,6 +522,7 @@
             hutangSearch: '',
             hutangFilterStatus: 'semua',
             // State laporan
+            laporanTab: 'transaksi',  // 'transaksi' | 'neraca'
             laporanPage: 1,
             laporanFilter: 'semua',  // semua | hari | minggu | bulan | bulan2 | bulan3 | custom
             laporanCustomFrom: '',
@@ -606,6 +650,7 @@
                             minStock: p.Stok_Minimal||10, poinPerUnit: p.Poin_Per_Unit||0, unlimited: String(p.Unlimited||'').toLowerCase()==='true', image: '📦'
                         }; });
                     }
+                    loadKategoriList(); // sinkron kategori dari produk yang baru dimuat
                     if (data.customers) {
                         state.customers = data.customers.map(function(c) { return {
                             id: c.ID_Pelanggan, name: c.Nama_Pelanggan,
@@ -691,6 +736,13 @@
                             try {
                                 var parsedRewards = JSON.parse(pen.reward_list);
                                 if (Array.isArray(parsedRewards)) rewardData.rewardList = parsedRewards;
+                            } catch(e) {}
+                        }
+                        // Muat daftar kategori tersimpan dari spreadsheet
+                        if (pen.kategori_list !== undefined && pen.kategori_list) {
+                            try {
+                                var parsedKat = JSON.parse(pen.kategori_list);
+                                if (Array.isArray(parsedKat)) kategoriList = parsedKat;
                             } catch(e) {}
                         }
                     }
@@ -1346,6 +1398,8 @@
 
             const lowStockProducts = state.products.filter(p => !p.unlimited && p.stock <= p.minStock);
             const alertCount = lowStockProducts.length;
+
+
 
             // Grafik 7 hari terakhir
             const days = [];
@@ -2711,6 +2765,114 @@
             renderContent();
         }
 
+
+        // ── KATEGORI DROPDOWN HELPER ──────────────────────────────────
+        // Membangun HTML combo-box kategori: dropdown + input tambah baru
+        function buildKategoriField(currentVal) {
+            loadKategoriList();
+            var opts = '<option value="">-- Pilih Kategori --</option>';
+            var matched = false;
+            kategoriList.forEach(function(k) {
+                var sel = (k === currentVal) ? ' selected' : '';
+                if (sel) matched = true;
+                opts += '<option value="' + k.replace(/"/g, '&quot;') + '"' + sel + '>' + k + '</option>';
+            });
+            // Opsi "Tambah baru"
+            opts += '<option value="__new__">+ Tambah kategori baru...</option>';
+
+            var showNew = (!matched && currentVal && currentVal !== '__new__');
+
+            return '<select id="p-category-select" onchange="onKategoriSelectChange(this)"'
+                + ' style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;background:#fff;margin-bottom:' + (showNew ? '6px' : '0') + ';">'
+                + opts
+                + '</select>'
+                + '<div id="p-category-new-row" style="display:' + (showNew ? 'flex' : 'none') + ';gap:6px;margin-top:4px;">'
+                + '<input type="text" id="p-category-new-input" placeholder="Nama kategori baru..."'
+                + ' value="' + (showNew ? currentVal.replace(/"/g,'&quot;') : '') + '"'
+                + ' style="flex:1;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;"/>'
+                + '<button type="button" onclick="simpanKategoriBaru()" title="Simpan ke daftar"'
+                + ' style="padding:7px 10px;background:#16a34a;color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer;white-space:nowrap;font-weight:600;">'
+                + '<i class="ph ph-floppy-disk"></i>'
+                + '</button>'
+                + '</div>'
+                // Hidden input yg dipakai saveProduct untuk baca nilai final
+                + '<input type="hidden" id="p-category" value="' + (currentVal || '').replace(/"/g,'&quot;') + '" required />';
+        }
+
+        // Saat select berubah
+        function onKategoriSelectChange(sel) {
+            var newRow = document.getElementById('p-category-new-row');
+            var hidden = document.getElementById('p-category');
+            if (sel.value === '__new__') {
+                if (newRow) { newRow.style.display = 'flex'; sel.style.marginBottom = '6px'; }
+                if (hidden) hidden.value = '';
+                setTimeout(function(){ var inp = document.getElementById('p-category-new-input'); if(inp) inp.focus(); }, 50);
+            } else {
+                if (newRow) { newRow.style.display = 'none'; sel.style.marginBottom = '0'; }
+                if (hidden) hidden.value = sel.value;
+            }
+        }
+
+        // Simpan nama kategori baru ke daftar & pilih otomatis di dropdown
+        function simpanKategoriBaru() {
+            var inp    = document.getElementById('p-category-new-input');
+            var sel    = document.getElementById('p-category-select');
+            var hidden = document.getElementById('p-category');
+            if (!inp || !inp.value.trim()) {
+                inp && inp.focus();
+                return;
+            }
+            var nama = inp.value.trim();
+            saveKategoriToList(nama);
+
+            // Tambah ke dropdown jika belum ada
+            var existing = Array.from(sel.options).find(function(o){ return o.value === nama; });
+            if (!existing) {
+                var newOpt = document.createElement('option');
+                newOpt.value = nama; newOpt.text = nama;
+                // Sisipkan sebelum opsi "+ Tambah kategori baru..."
+                var lastOpt = sel.querySelector('option[value="__new__"]');
+                sel.insertBefore(newOpt, lastOpt);
+            }
+            sel.value = nama;
+            if (hidden) hidden.value = nama;
+            // Sembunyikan baris input baru
+            var newRow = document.getElementById('p-category-new-row');
+            if (newRow) { newRow.style.display = 'none'; sel.style.marginBottom = '0'; }
+            showToast('Kategori "' + nama + '" disimpan.', 'success');
+        }
+
+        // Fungsi kelola kategori — tampil list kategori tersimpan dengan tombol hapus
+        function showKategoriManager() {
+            loadKategoriList();
+            var rows = kategoriList.length === 0
+                ? '<p style="color:#9ca3af;font-size:13px;text-align:center;padding:12px 0;">Belum ada kategori tersimpan.</p>'
+                : kategoriList.map(function(k) {
+                    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:5px;">'
+                        + '<span style="font-size:13px;color:#374151;font-weight:500;">' + k + '</span>'
+                        + '<button type="button" onclick="hapusKategori(\'' + k.replace(/'/g,"\'") + '\')" style="padding:3px 8px;background:#fee2e2;color:#dc2626;border:none;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;" title="Hapus kategori ini">'
+                        + '<i class="ph ph-trash"></i></button>'
+                        + '</div>';
+                }).join('');
+
+            showConfirm(
+                'Kelola Kategori',
+                '<div style="max-height:260px;overflow-y:auto;">' + rows + '</div>',
+                'info',
+                null, 'Tutup', null, true
+            );
+        }
+
+        function hapusKategori(nama) {
+            deleteKategoriFromList(nama);
+            showToast('Kategori "' + nama + '" dihapus.', 'warning');
+            // Refresh manager jika terbuka
+            setTimeout(function(){
+                var overlay = document.getElementById('notif-overlay');
+                if (overlay && !overlay.classList.contains('hidden')) showKategoriManager();
+            }, 100);
+        }
+
         function openProductModal(id = null) {
             const modal = document.getElementById('product-modal');
             const isEdit = id !== null;
@@ -2722,7 +2884,10 @@
                 <div class="bg-white rounded-xl shadow-lg w-full max-w-md p-6 relative">
                     <div class="flex justify-between items-center mb-4">
                         <h3 class="text-lg font-bold text-gray-800">${isEdit ? 'Edit Produk' : 'Tambah Produk Baru'}</h3>
-                        <button onclick="closeProductModal()" class="text-gray-400 hover:bg-gray-100 p-1 rounded-md"><i class="ph ph-x text-lg"></i></button>
+                        <div class="flex items-center gap-1">
+                            <button type="button" onclick="showKategoriManager()" title="Kelola Kategori" class="text-xs text-indigo-600 hover:bg-indigo-50 px-2 py-1 rounded-md font-semibold flex items-center gap-1 border border-indigo-200"><i class="ph ph-tag text-sm"></i> Kategori</button>
+                            <button onclick="closeProductModal()" class="text-gray-400 hover:bg-gray-100 p-1 rounded-md ml-1"><i class="ph ph-x text-lg"></i></button>
+                        </div>
                     </div>
                     <form onsubmit="saveProduct(event, '${isEdit ? 'edit' : 'add'}')">
                         <div class="space-y-4 max-h-[65vh] overflow-y-auto px-1 hide-scrollbar">
@@ -2733,7 +2898,9 @@
                                 </div>
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700 mb-1">Kategori</label>
-                                    <input type="text" id="p-category" value="${p.category}" required class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-1 focus:ring-green-500" />
+                                    <div id="p-category-wrapper">
+                                        ${buildKategoriField(p.category)}
+                                    </div>
                                 </div>
                             </div>
 
@@ -2830,7 +2997,16 @@
                 id: document.getElementById('p-id').value,
                 barcode: document.getElementById('p-barcode').value,
                 name: document.getElementById('p-name').value,
-                category: document.getElementById('p-category').value,
+                category: (function(){
+                    var h = document.getElementById('p-category');
+                    var s = document.getElementById('p-category-select');
+                    var n = document.getElementById('p-category-new-input');
+                    var v = (h && h.value.trim()) ? h.value.trim()
+                          : (s && s.value !== '__new__' && s.value ? s.value.trim()
+                          : (n ? n.value.trim() : ''));
+                    if (v) saveKategoriToList(v);
+                    return v;
+                })(),
                 modal: Number(document.getElementById('p-modal').value),
                 price: Number(document.getElementById('p-price').value),
                 wholesalePrice: Number(document.getElementById('p-wholesalePrice').value),
@@ -3617,6 +3793,7 @@
 
                 return `
                 <div class="space-y-4">
+                    ${tabBar}
                     <!-- Summary cards -->
                     <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
                         <div class="bg-white rounded-xl p-4 shadow-sm border border-gray-100 text-center">
@@ -3845,6 +4022,101 @@
         }
 
         // Redeem poin ke diskon harga (dari tabel pelanggan di menu Poin & Reward)
+        // ── DROPDOWN TUKAR POIN ────────────────────────────────────
+        // Satu tombol "Tukar Poin ▾" per baris — klik buka popup compact
+        function openTukarPoinDropdown(custId, btn) {
+            // Tutup dropdown lain yang mungkin masih terbuka
+            var existing = document.getElementById('tukar-poin-dropdown');
+            if (existing) {
+                if (existing.dataset.custId === custId) { existing.remove(); return; }
+                existing.remove();
+            }
+            document.removeEventListener('click', closeTukarPoinOnOutside, true);
+
+            var cust = rewardData.customers.find(function(c){ return c.id === custId; });
+            if (!cust) return;
+
+            // Opsi 1: Tukar ke diskon tunai
+            var canDiskon = (cust.poin||0) >= 100;
+            var items = '<button type="button" onclick="closeTukarPoinDropdown(); redeemPoints(\'' + custId + '\')" '
+                + (canDiskon ? '' : 'disabled ')
+                + 'style="width:100%;display:flex;align-items:center;gap:8px;padding:8px 12px;border:none;'
+                + 'background:' + (canDiskon ? '#f0fdf4' : '#f9fafb') + ';'
+                + 'color:' + (canDiskon ? '#15803d' : '#9ca3af') + ';'
+                + 'font-size:12px;font-weight:600;border-radius:8px;'
+                + 'cursor:' + (canDiskon ? 'pointer' : 'not-allowed') + ';text-align:left;margin-bottom:4px;"'
+                + (canDiskon ? ' onmouseover="this.style.background=\'#dcfce7\'" onmouseout="this.style.background=\'#f0fdf4\'"' : '')
+                + '><i class="ph ph-currency-circle-dollar" style="font-size:14px;flex-shrink:0;"></i>'
+                + '<span style="flex:1;">Tukar ke Diskon Tunai</span>'
+                + '<span style="font-size:10px;color:' + (canDiskon ? '#16a34a' : '#d1d5db') + ';">min. 100 poin</span>'
+                + '</button>';
+
+            // Opsi 2: Daftar reward
+            if (rewardData.rewardList.length > 0) {
+                items += '<div style="font-size:10px;color:#9ca3af;font-weight:700;padding:6px 4px 3px;'
+                    + 'border-top:1px solid #f3f4f6;margin-top:2px;letter-spacing:0.5px;text-transform:uppercase;">Reward</div>';
+                rewardData.rewardList.forEach(function(r) {
+                    var can = (cust.poin||0) >= r.poinDibutuhkan;
+                    items += '<button type="button" onclick="closeTukarPoinDropdown(); redeemRewardItem(\'' + custId + '\',\'' + r.id + '\')" '
+                        + (can ? '' : 'disabled ')
+                        + 'style="width:100%;display:flex;align-items:center;gap:8px;padding:8px 12px;border:none;'
+                        + 'background:' + (can ? '#faf5ff' : '#f9fafb') + ';'
+                        + 'color:' + (can ? '#7e22ce' : '#9ca3af') + ';'
+                        + 'font-size:12px;font-weight:600;border-radius:8px;'
+                        + 'cursor:' + (can ? 'pointer' : 'not-allowed') + ';text-align:left;margin-bottom:4px;"'
+                        + (can ? ' onmouseover="this.style.background=\'#f3e8ff\'" onmouseout="this.style.background=\'#faf5ff\'"' : '')
+                        + '><i class="ph ph-gift" style="font-size:14px;flex-shrink:0;"></i>'
+                        + '<span style="flex:1;">' + r.name + '</span>'
+                        + '<span style="font-size:10px;white-space:nowrap;color:' + (can ? '#7c3aed' : '#d1d5db') + ';">'
+                        + r.poinDibutuhkan.toLocaleString('id-ID') + ' poin</span>'
+                        + '</button>';
+                });
+            } else {
+                items += '<p style="font-size:11px;color:#9ca3af;text-align:center;padding:8px 0;border-top:1px solid #f3f4f6;margin-top:4px;">Belum ada reward tersedia.</p>';
+            }
+
+            // Buat dropdown
+            var dd = document.createElement('div');
+            dd.id = 'tukar-poin-dropdown';
+            dd.dataset.custId = custId;
+            dd.style.cssText = 'position:fixed;z-index:9999;background:#fff;border:1px solid #e5e7eb;'
+                + 'border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.13);padding:8px;min-width:240px;max-width:290px;';
+            dd.innerHTML = '<div style="font-size:11px;font-weight:700;color:#374151;padding:4px 8px 8px;'
+                + 'border-bottom:1px solid #f3f4f6;margin-bottom:6px;">'
+                + '<i class="ph ph-arrows-left-right" style="color:#16a34a;margin-right:4px;"></i>'
+                + 'Tukar Poin — <span style="color:#16a34a;">' + (cust.poin||0).toLocaleString('id-ID') + ' poin</span>'
+                + '</div>' + items;
+            document.body.appendChild(dd);
+
+            // Posisi tepat di bawah tombol
+            var rect = btn.getBoundingClientRect();
+            var ddW = 270;
+            var left = rect.left;
+            if (left + ddW > window.innerWidth - 8) left = window.innerWidth - ddW - 8;
+            if (left < 8) left = 8;
+            dd.style.left = left + 'px';
+            dd.style.top  = (rect.bottom + 6) + 'px';
+
+            // Tutup saat klik di luar
+            setTimeout(function() {
+                document.addEventListener('click', closeTukarPoinOnOutside, true);
+            }, 0);
+        }
+
+        function closeTukarPoinOnOutside(e) {
+            var dd = document.getElementById('tukar-poin-dropdown');
+            if (dd && !dd.contains(e.target)) {
+                dd.remove();
+                document.removeEventListener('click', closeTukarPoinOnOutside, true);
+            }
+        }
+
+        function closeTukarPoinDropdown() {
+            var dd = document.getElementById('tukar-poin-dropdown');
+            if (dd) dd.remove();
+            document.removeEventListener('click', closeTukarPoinOnOutside, true);
+        }
+
         function redeemPoints(custId) {
             const cust = rewardData.customers.find(c => c.id === custId);
             if (!cust || (cust.poin||0) < 100) {
@@ -4129,32 +4401,14 @@
                     var progText = nextTier
                         ? "<p class=\"text-[10px] text-gray-400\">" + (nextTier.min-(c.poin||0)) + " lagi ke " + nextTier.name + "</p>"
                         : "<p class=\"text-[10px] text-yellow-600 font-bold\">Tier Tertinggi!</p>";
-                    // Tombol reward — satu tombol per reward yang tersedia
-                    var rewardBtns = "";
-                    if (rewardData.rewardList.length > 0) {
-                        rewardBtns = "<div class=\"flex flex-wrap gap-1 mt-1\">";
-                        rewardData.rewardList.forEach(function(r) {
-                            var canRedeem = (c.poin||0) >= r.poinDibutuhkan;
-                            rewardBtns += "<button onclick=\"redeemRewardItem('" + c.id + "','" + r.id + "')\" "
-                                + (!canRedeem ? "disabled " : "")
-                                + "class=\"px-2 py-1 text-xs font-semibold rounded-lg border transition-colors "
-                                + (canRedeem
-                                    ? "bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100\">"
-                                    : "bg-gray-50 text-gray-400 border-gray-200 cursor-not-allowed\">")
-                                + "<i class=\"ph ph-gift text-xs\"></i> " + r.name + " (" + r.poinDibutuhkan + ")"
-                                + "</button>";
-                        });
-                        rewardBtns += "</div>";
-                    }
                     custRows += "<tr class=\"border-b border-gray-100 hover:bg-gray-50/50\">"
                         + "<td class=\"py-3 px-4\"><p class=\"font-medium text-sm text-gray-800\">" + c.name + "</p><p class=\"text-xs text-gray-400 font-mono\">" + c.id + "</p></td>"
                         + "<td class=\"py-3 px-4 text-center\"><span class=\"px-2.5 py-1 rounded-full text-xs font-bold " + tier.color + "\">" + tier.name + "</span></td>"
                         + "<td class=\"py-3 px-4 text-center\"><span class=\"text-base font-bold text-green-600\">" + ((c.poin||0).toLocaleString("id-ID")) + "</span>"
                         + "<div class=\"w-full bg-gray-200 rounded-full h-1.5 mt-1\"><div class=\"bg-green-500 h-1.5 rounded-full\" style=\"width:" + pct + "%\"></div></div>" + progText + "</td>"
                         + "<td class=\"py-3 px-4 text-center text-sm text-gray-600\">" + formatRp(c.totalBelanja||0) + "</td>"
-                        + "<td class=\"py-3 px-4\">"
-                        + "<button onclick=\"redeemPoints('" + c.id + "')\" class=\"px-2.5 py-1 bg-green-50 text-green-700 text-xs font-semibold rounded-lg hover:bg-green-100 border border-green-200 flex items-center gap-1 mb-1\"><i class=\"ph ph-currency-circle-dollar text-sm\"></i> Tukar Diskon</button>"
-                        + rewardBtns
+                        + "<td class=\"py-3 px-4 text-center\">"
+                        + "<button onclick=\"openTukarPoinDropdown('" + c.id + "',this)\" class=\"px-2.5 py-1 bg-green-600 text-white text-xs font-semibold rounded-lg hover:bg-green-700 border border-green-700 flex items-center gap-1 mx-auto\"><i class=\"ph ph-arrows-left-right text-sm\"></i> Tukar Poin <i class=\"ph ph-caret-down text-xs\"></i></button>"
                         + "</td></tr>";
                 });
             }
@@ -4362,29 +4616,14 @@
                         var progText = nextTier
                             ? '<p class="text-[10px] text-gray-400">' + (nextTier.min-(c.poin||0)) + ' lagi ke ' + nextTier.name + '</p>'
                             : '<p class="text-[10px] text-yellow-600 font-bold">Tier Tertinggi!</p>';
-                        var rewardBtns = '';
-                        if (rewardData.rewardList.length > 0) {
-                            rewardBtns = '<div class="flex flex-wrap gap-1 mt-1">';
-                            rewardData.rewardList.forEach(function(r) {
-                                var canRedeem = (c.poin||0) >= r.poinDibutuhkan;
-                                rewardBtns += '<button onclick="redeemRewardItem(\'' + c.id + '\',\'' + r.id + '\')" '
-                                    + (!canRedeem ? 'disabled ' : '')
-                                    + 'class="px-2 py-1 text-xs font-semibold rounded-lg border transition-colors '
-                                    + (canRedeem ? 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100">' : 'bg-gray-50 text-gray-400 border-gray-200 cursor-not-allowed">')
-                                    + '<i class="ph ph-gift text-xs"></i> ' + r.name + ' (' + r.poinDibutuhkan + ')'
-                                    + '</button>';
-                            });
-                            rewardBtns += '</div>';
-                        }
                         return '<tr class="border-b border-gray-100 hover:bg-gray-50/50">'
                             + '<td class="py-3 px-4"><p class="font-medium text-sm text-gray-800">' + c.name + '</p><p class="text-xs text-gray-400 font-mono">' + c.id + '</p></td>'
                             + '<td class="py-3 px-4 text-center"><span class="px-2.5 py-1 rounded-full text-xs font-bold ' + tier.color + '">' + tier.name + '</span></td>'
                             + '<td class="py-3 px-4 text-center"><span class="text-base font-bold text-green-600">' + ((c.poin||0).toLocaleString('id-ID')) + '</span>'
                             + '<div class="w-full bg-gray-200 rounded-full h-1.5 mt-1"><div class="bg-green-500 h-1.5 rounded-full" style="width:' + pct + '%"></div></div>' + progText + '</td>'
                             + '<td class="py-3 px-4 text-center text-sm text-gray-600">' + formatRp(c.totalBelanja||0) + '</td>'
-                            + '<td class="py-3 px-4">'
-                            + '<button onclick="redeemPoints(\'' + c.id + '\')" class="px-2.5 py-1 bg-green-50 text-green-700 text-xs font-semibold rounded-lg hover:bg-green-100 border border-green-200 flex items-center gap-1 mb-1"><i class="ph ph-currency-circle-dollar text-sm"></i> Tukar Diskon</button>'
-                            + rewardBtns
+                            + '<td class="py-3 px-4 text-center">'
+                            + '<button onclick="openTukarPoinDropdown(\'' + c.id + '\',this)" class="px-2.5 py-1 bg-green-600 text-white text-xs font-semibold rounded-lg hover:bg-green-700 border border-green-700 flex items-center gap-1 mx-auto"><i class="ph ph-arrows-left-right text-sm"></i> Tukar Poin <i class="ph ph-caret-down text-xs"></i></button>'
                             + '</td></tr>';
                     }).join('');
                 }
@@ -4459,6 +4698,27 @@
         }
 
         function getLaporanHTML() {
+            var isAdmin = currentUser && currentUser.role === 'admin';
+
+            // Tab bar — Neraca Modal hanya untuk admin
+            var tabTrxActive   = state.laporanTab !== 'neraca';
+            var tabNrcActive   = state.laporanTab === 'neraca';
+            var tabBar = '<div class="flex gap-2 mb-4">'
+                + '<button onclick="state.laporanTab=\'transaksi\'; renderContent()" style="padding:8px 16px;font-size:13px;font-weight:600;border-radius:8px;border:1px solid ' + (tabTrxActive ? '#16a34a' : '#e5e7eb') + ';background:' + (tabTrxActive ? '#16a34a' : '#fff') + ';color:' + (tabTrxActive ? '#fff' : '#4b5563') + ';cursor:pointer;">'
+                + '<i class="ph ph-receipt" style="margin-right:6px;"></i>Riwayat Transaksi'
+                + '</button>';
+            if (isAdmin) {
+                tabBar += '<button onclick="state.laporanTab=\'neraca\'; renderContent()" style="padding:8px 16px;font-size:13px;font-weight:600;border-radius:8px;border:1px solid ' + (tabNrcActive ? '#4f46e5' : '#e5e7eb') + ';background:' + (tabNrcActive ? '#4f46e5' : '#fff') + ';color:' + (tabNrcActive ? '#fff' : '#4b5563') + ';cursor:pointer;">'
+                    + '<i class="ph ph-scales" style="margin-right:6px;"></i>Neraca Modal'
+                    + '</button>';
+            }
+            tabBar += '</div>';
+
+            // Route ke neraca tab
+            if (isAdmin && tabNrcActive) {
+                return '<div class="space-y-4">' + tabBar + getNeracaModalHTML() + '</div>';
+            }
+
             const now = new Date();
             const filter = state.laporanFilter;
             const q = (state.laporanSearch || '').toLowerCase().trim();
@@ -4566,6 +4826,7 @@
 
             return `
                 <div class="space-y-4">
+                    ${tabBar}
                     <!-- Summary cards -->
                     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
                         <div class="bg-white rounded-xl p-4 shadow-sm border border-gray-100 flex items-center gap-3">
@@ -4645,6 +4906,341 @@
                     </div>
                 </div>
             `;
+        }
+
+
+        // ── NERACA MODAL (admin only) ─────────────────────────────────
+        function getNeracaModalHTML() {
+            var now = new Date();
+            var tglStr = now.toLocaleDateString('id-ID', { day:'2-digit', month:'long', year:'numeric' });
+
+            // ── 1. TOTAL NILAI MODAL STOK ──────────────────────────────
+            // Modal per produk = harga modal × stok (produk unlimited tidak dihitung stok fisik)
+            var totalModalStok = 0;
+            var totalNilaiJual = 0;
+            var totalProduk    = 0;
+            var kategoriMap    = {};  // { nama_kategori: { modal, jual, qty } }
+
+            state.products.forEach(function(p) {
+                var stok = p.unlimited ? 0 : (p.stock || 0);
+                var modal = (p.modal || 0) * stok;
+                var jual  = (p.price || 0) * stok;
+                totalModalStok += modal;
+                totalNilaiJual += jual;
+                totalProduk++;
+                var kat = p.category || 'Tanpa Kategori';
+                if (!kategoriMap[kat]) kategoriMap[kat] = { modal: 0, jual: 0, qty: 0, items: 0 };
+                kategoriMap[kat].modal += modal;
+                kategoriMap[kat].jual  += jual;
+                kategoriMap[kat].qty   += stok;
+                kategoriMap[kat].items++;
+            });
+
+            // ── 2. HUTANG PIUTANG ──────────────────────────────────────
+            // Hutang ke supplier  = tipe 'supplier' & belum lunas → mengurangi kekayaan
+            // Piutang ke pelanggan = tipe 'pelanggan' & belum lunas → menambah kekayaan
+            var hutangSupplier  = 0;  // kita yang berhutang ke supplier
+            var piutangPelanggan = 0; // pelanggan yang berhutang ke kita
+            var jmlHutangSupplier   = 0;
+            var jmlPiutangPelanggan = 0;
+
+            hutangPiutangList.forEach(function(h) {
+                if (h.status === 'lunas') return;
+                var sisa = (h.jumlah || 0) - (h.sudahDibayar || 0);
+                if (sisa <= 0) return;
+                if (h.tipe === 'supplier') {
+                    hutangSupplier += sisa;
+                    jmlHutangSupplier++;
+                } else if (h.tipe === 'pelanggan') {
+                    piutangPelanggan += sisa;
+                    jmlPiutangPelanggan++;
+                }
+            });
+
+            // ── 3. KEKAYAAN BERSIH ─────────────────────────────────────
+            // Kekayaan Bersih = Modal Stok + Piutang Pelanggan − Hutang Supplier
+            var kekayaanBersih = totalModalStok + piutangPelanggan - hutangSupplier;
+            var potensiLaba    = totalNilaiJual - totalModalStok; // potensi laba jika semua stok terjual
+
+            // ── 4. RENDER KATEGORI TABLE ───────────────────────────────
+            var katEntries = Object.keys(kategoriMap).map(function(k) {
+                return { kat: k, data: kategoriMap[k] };
+            }).sort(function(a, b) { return b.data.modal - a.data.modal; });
+
+            var katRows = katEntries.length === 0
+                ? '<tr><td colspan="5" class="text-center py-8 text-gray-400">Belum ada produk.</td></tr>'
+                : katEntries.map(function(e) {
+                    var pct = totalModalStok > 0 ? Math.round((e.data.modal / totalModalStok) * 100) : 0;
+                    return '<tr class="border-b border-gray-100 hover:bg-gray-50/50">'
+                        + '<td class="py-3 px-4 text-sm font-medium text-gray-800">' + e.kat + '</td>'
+                        + '<td class="py-3 px-4 text-center text-sm text-gray-500">' + e.data.items + ' produk</td>'
+                        + '<td class="py-3 px-4 text-center text-sm text-gray-500">' + e.data.qty.toLocaleString('id-ID') + ' unit</td>'
+                        + '<td class="py-3 px-4 text-right font-semibold text-gray-800">' + formatRp(e.data.modal) + '</td>'
+                        + '<td class="py-3 px-4">'
+                        + '<div class="flex items-center gap-2">'
+                        + '<div class="flex-1 bg-gray-200 rounded-full h-2"><div class="bg-indigo-500 h-2 rounded-full" style="width:' + pct + '%"></div></div>'
+                        + '<span class="text-xs text-gray-500 w-8 text-right">' + pct + '%</span>'
+                        + '</div></td></tr>';
+                }).join('');
+
+            // ── 5. HUTANG PIUTANG DETAIL TABLE ─────────────────────────
+            var hpAktif = hutangPiutangList.filter(function(h) { return h.status !== 'lunas'; });
+            var hpRows = hpAktif.length === 0
+                ? '<tr><td colspan="4" class="text-center py-6 text-gray-400 text-sm">Tidak ada hutang/piutang aktif.</td></tr>'
+                : hpAktif.slice(0, 10).map(function(h) {
+                    var sisa = (h.jumlah || 0) - (h.sudahDibayar || 0);
+                    var isSupplier = h.tipe === 'supplier';
+                    return '<tr class="border-b border-gray-100 hover:bg-gray-50/50">'
+                        + '<td class="py-2.5 px-4 text-sm text-gray-800">' + h.nama + '</td>'
+                        + '<td class="py-2.5 px-4 text-center">'
+                        + '<span class="px-2 py-0.5 rounded-full text-xs font-semibold ' + (isSupplier ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700') + '">'
+                        + (isSupplier ? 'Hutang Supplier' : 'Piutang Pelanggan') + '</span></td>'
+                        + '<td class="py-2.5 px-4 text-right font-semibold ' + (isSupplier ? 'text-red-600' : 'text-green-600') + '">'
+                        + (isSupplier ? '−' : '+') + formatRp(sisa) + '</td>'
+                        + '<td class="py-2.5 px-4 text-center text-xs text-gray-400">' + (h.jatuhTempo || '—') + '</td>'
+                        + '</tr>';
+                }).join('')
+                + (hpAktif.length > 10 ? '<tr><td colspan="4" class="text-center py-2 text-xs text-gray-400">+' + (hpAktif.length - 10) + ' lainnya (lihat menu Hutang Piutang)</td></tr>' : '');
+
+            // ── 6. KEKAYAAN BERSIH COLOR ──────────────────────────────
+            var kbColor   = kekayaanBersih >= 0 ? 'text-green-600' : 'text-red-600';
+            var kbBg      = kekayaanBersih >= 0 ? 'bg-green-500'   : 'bg-red-500';
+            var kbBorder  = kekayaanBersih >= 0 ? 'border-green-200' : 'border-red-200';
+            var kbBgLight = kekayaanBersih >= 0 ? 'bg-green-50'    : 'bg-red-50';
+
+            return '<div class="space-y-5">'
+
+                // ── Header ──
+                + '<div style="background:linear-gradient(135deg,#312e81,#4338ca,#6366f1);border-radius:16px;padding:20px 24px;color:#fff;">'
+                + '<div style="display:flex;align-items:center;gap:14px;">'
+                + '<div style="width:48px;height:48px;border-radius:12px;background:rgba(255,255,255,0.18);display:flex;align-items:center;justify-content:center;flex-shrink:0;">'
+                + '<i class="ph ph-scales" style="font-size:26px;"></i></div>'
+                + '<div><div style="font-size:18px;font-weight:900;letter-spacing:0.3px;">Neraca Modal</div>'
+                + '<div style="font-size:12px;opacity:0.8;margin-top:2px;">Per ' + tglStr + ' &bull; Hanya terlihat oleh Admin</div>'
+                + '</div></div></div>'
+
+                // ── 4 Summary Cards ──
+                + '<div class="grid grid-cols-2 lg:grid-cols-4 gap-4">'
+
+                // Modal Stok
+                + '<div class="bg-white rounded-xl p-4 shadow-sm border border-gray-100">'
+                + '<div class="flex items-center gap-3 mb-2"><div class="p-2.5 rounded-lg bg-indigo-500 text-white shrink-0"><i class="ph ph-package text-xl"></i></div>'
+                + '<p class="text-xs text-gray-500 font-medium leading-tight">Total Modal Stok</p></div>'
+                + '<p class="text-xl font-bold text-gray-800">' + formatRp(totalModalStok) + '</p>'
+                + '<p class="text-xs text-gray-400 mt-1">' + totalProduk + ' produk terdaftar</p></div>'
+
+                // Nilai Jual Stok
+                + '<div class="bg-white rounded-xl p-4 shadow-sm border border-gray-100">'
+                + '<div class="flex items-center gap-3 mb-2"><div class="p-2.5 rounded-lg bg-emerald-500 text-white shrink-0"><i class="ph ph-trend-up text-xl"></i></div>'
+                + '<p class="text-xs text-gray-500 font-medium leading-tight">Nilai Jual Stok</p></div>'
+                + '<p class="text-xl font-bold text-gray-800">' + formatRp(totalNilaiJual) + '</p>'
+                + '<p class="text-xs text-emerald-600 mt-1">Potensi laba: ' + formatRp(potensiLaba) + '</p></div>'
+
+                // Hutang Supplier
+                + '<div class="bg-white rounded-xl p-4 shadow-sm border border-red-100">'
+                + '<div class="flex items-center gap-3 mb-2"><div class="p-2.5 rounded-lg bg-red-400 text-white shrink-0"><i class="ph ph-arrow-up-right text-xl"></i></div>'
+                + '<p class="text-xs text-gray-500 font-medium leading-tight">Hutang Supplier</p></div>'
+                + '<p class="text-xl font-bold text-red-600">' + formatRp(hutangSupplier) + '</p>'
+                + '<p class="text-xs text-gray-400 mt-1">' + jmlHutangSupplier + ' tagihan aktif</p></div>'
+
+                // Piutang Pelanggan
+                + '<div class="bg-white rounded-xl p-4 shadow-sm border border-green-100">'
+                + '<div class="flex items-center gap-3 mb-2"><div class="p-2.5 rounded-lg bg-green-500 text-white shrink-0"><i class="ph ph-arrow-down-left text-xl"></i></div>'
+                + '<p class="text-xs text-gray-500 font-medium leading-tight">Piutang Pelanggan</p></div>'
+                + '<p class="text-xl font-bold text-green-600">' + formatRp(piutangPelanggan) + '</p>'
+                + '<p class="text-xs text-gray-400 mt-1">' + jmlPiutangPelanggan + ' tagihan aktif</p></div>'
+
+                + '</div>'  // end grid cards
+
+                // ── Kekayaan Bersih Banner ──
+                + '<div class="rounded-2xl border ' + kbBorder + ' ' + kbBgLight + ' p-5 flex flex-col sm:flex-row sm:items-center gap-4">'
+                + '<div class="flex items-center gap-4 flex-1">'
+                + '<div class="p-3 rounded-xl ' + kbBg + ' text-white shrink-0"><i class="ph ph-wallet text-2xl"></i></div>'
+                + '<div>'
+                + '<p class="text-xs text-gray-500 font-medium">Kekayaan Bersih</p>'
+                + '<p class="text-2xl font-black ' + kbColor + '">' + formatRp(kekayaanBersih) + '</p>'
+                + '<p class="text-xs text-gray-500 mt-1">Modal Stok <span class="font-semibold text-gray-700">' + formatRp(totalModalStok) + '</span>'
+                + ' + Piutang <span class="font-semibold text-green-600">' + formatRp(piutangPelanggan) + '</span>'
+                + ' − Hutang <span class="font-semibold text-red-500">' + formatRp(hutangSupplier) + '</span></p>'
+                + '</div></div>'
+                + '<button onclick="downloadNeracaPDF()" class="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-xl flex items-center gap-2 shrink-0 transition-colors">'
+                + '<i class="ph ph-download-simple"></i> Unduh PDF</button>'
+                + '</div>'
+
+                // ── Dua kolom bawah ──
+                + '<div class="grid grid-cols-1 xl:grid-cols-2 gap-5">'
+
+                // Tabel Modal per Kategori
+                + '<div class="bg-white rounded-xl shadow-sm border border-gray-100">'
+                + '<div class="p-4 border-b border-gray-100"><h3 class="font-semibold text-gray-800 flex items-center gap-2 text-sm"><i class="ph ph-chart-pie text-indigo-600 text-base"></i> Modal per Kategori Produk</h3></div>'
+                + '<div class="overflow-x-auto">'
+                + '<table class="w-full text-left border-collapse text-sm">'
+                + '<thead><tr class="bg-gray-50 text-gray-500 text-xs border-b border-gray-200">'
+                + '<th class="py-3 px-4 font-medium">Kategori</th>'
+                + '<th class="py-3 px-4 font-medium text-center">Produk</th>'
+                + '<th class="py-3 px-4 font-medium text-center">Stok</th>'
+                + '<th class="py-3 px-4 font-medium text-right">Nilai Modal</th>'
+                + '<th class="py-3 px-4 font-medium">Porsi</th>'
+                + '</tr></thead>'
+                + '<tbody>' + katRows + '</tbody>'
+                + '<tfoot><tr class="bg-indigo-50 border-t-2 border-indigo-200">'
+                + '<td class="py-3 px-4 font-bold text-indigo-800 text-sm" colspan="3">Total Semua Kategori</td>'
+                + '<td class="py-3 px-4 text-right font-black text-indigo-800 text-sm">' + formatRp(totalModalStok) + '</td>'
+                + '<td class="py-3 px-4"></td></tr></tfoot>'
+                + '</table></div></div>'
+
+                // Tabel Hutang Piutang Aktif
+                + '<div class="bg-white rounded-xl shadow-sm border border-gray-100">'
+                + '<div class="p-4 border-b border-gray-100 flex items-center justify-between">'
+                + '<h3 class="font-semibold text-gray-800 flex items-center gap-2 text-sm"><i class="ph ph-handshake text-indigo-600 text-base"></i> Hutang & Piutang Aktif</h3>'
+                + '<button onclick="navigateTo(\'Hutang Piutang\')" class="text-xs text-indigo-600 hover:underline flex items-center gap-1"><i class="ph ph-arrow-right"></i> Kelola</button>'
+                + '</div>'
+                + '<div class="overflow-x-auto">'
+                + '<table class="w-full text-left border-collapse text-sm">'
+                + '<thead><tr class="bg-gray-50 text-gray-500 text-xs border-b border-gray-200">'
+                + '<th class="py-3 px-4 font-medium">Nama</th>'
+                + '<th class="py-3 px-4 font-medium text-center">Tipe</th>'
+                + '<th class="py-3 px-4 font-medium text-right">Sisa</th>'
+                + '<th class="py-3 px-4 font-medium text-center">Jatuh Tempo</th>'
+                + '</tr></thead>'
+                + '<tbody>' + hpRows + '</tbody>'
+                + '<tfoot><tr class="bg-gray-50 border-t border-gray-200">'
+                + '<td class="py-3 px-4 text-xs text-gray-500 font-medium" colspan="2">Hutang Supplier (−)</td>'
+                + '<td class="py-3 px-4 text-right font-bold text-red-600 text-sm">' + formatRp(hutangSupplier) + '</td>'
+                + '<td></td></tr>'
+                + '<tr class="bg-gray-50">'
+                + '<td class="py-3 px-4 text-xs text-gray-500 font-medium" colspan="2">Piutang Pelanggan (+)</td>'
+                + '<td class="py-3 px-4 text-right font-bold text-green-600 text-sm">' + formatRp(piutangPelanggan) + '</td>'
+                + '<td></td></tr></tfoot>'
+                + '</table></div></div>'
+
+                + '</div>'  // end xl:grid-cols-2
+                + '<p class="text-xs text-center text-gray-400 pb-2">Neraca ini dihitung secara real-time berdasarkan data produk & hutang piutang yang tersimpan. Refresh halaman untuk memperbarui.</p>'
+                + '</div>';  // end space-y-5
+        }
+
+        // ── DOWNLOAD NERACA PDF ────────────────────────────────────────
+        function downloadNeracaPDF() {
+            var now = new Date();
+            var tglStr = now.toLocaleDateString('id-ID', { day:'2-digit', month:'long', year:'numeric' });
+
+            // Recalculate
+            var totalModalStok = 0, totalNilaiJual = 0;
+            var kategoriMap = {};
+            state.products.forEach(function(p) {
+                var stok = p.unlimited ? 0 : (p.stock || 0);
+                totalModalStok += (p.modal || 0) * stok;
+                totalNilaiJual += (p.price || 0) * stok;
+                var kat = p.category || 'Tanpa Kategori';
+                if (!kategoriMap[kat]) kategoriMap[kat] = { modal: 0, qty: 0 };
+                kategoriMap[kat].modal += (p.modal || 0) * stok;
+                kategoriMap[kat].qty   += stok;
+            });
+
+            var hutangSupplier = 0, piutangPelanggan = 0;
+            hutangPiutangList.forEach(function(h) {
+                if (h.status === 'lunas') return;
+                var sisa = (h.jumlah || 0) - (h.sudahDibayar || 0);
+                if (sisa <= 0) return;
+                if (h.tipe === 'supplier') hutangSupplier += sisa;
+                else piutangPelanggan += sisa;
+            });
+            var kekayaanBersih = totalModalStok + piutangPelanggan - hutangSupplier;
+
+            var { jsPDF } = window.jspdf;
+            var doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+
+            // Header
+            doc.setFillColor(49, 46, 129);
+            doc.rect(0, 0, 210, 32, 'F');
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(16); doc.setFont(undefined, 'bold');
+            doc.text('NERACA MODAL', 14, 13);
+            doc.setFontSize(9); doc.setFont(undefined, 'normal');
+            doc.text(namaTokoStruk + '  |  Per ' + tglStr + '  |  Admin Only', 14, 21);
+            doc.text('Dicetak: ' + now.toLocaleString('id-ID'), 14, 27);
+
+            doc.setTextColor(30, 30, 30);
+            var y = 40;
+
+            // Ringkasan
+            doc.setFontSize(11); doc.setFont(undefined, 'bold');
+            doc.text('RINGKASAN KEKAYAAN', 14, y); y += 6;
+            doc.setFontSize(9); doc.setFont(undefined, 'normal');
+            var ringkasan = [
+                ['Total Modal Stok',    formatRp(totalModalStok)],
+                ['Total Nilai Jual Stok', formatRp(totalNilaiJual)],
+                ['Piutang Pelanggan (+)', formatRp(piutangPelanggan)],
+                ['Hutang Supplier (−)',   formatRp(hutangSupplier)],
+                ['KEKAYAAN BERSIH',       formatRp(kekayaanBersih)],
+            ];
+            doc.autoTable({
+                startY: y, head: [['Keterangan', 'Nilai']], body: ringkasan,
+                theme: 'grid', headStyles: { fillColor: [79, 70, 229], fontSize: 9 },
+                bodyStyles: { fontSize: 9 },
+                didParseCell: function(data) {
+                    if (data.row.index === 4) {
+                        data.cell.styles.fontStyle = 'bold';
+                        data.cell.styles.fillColor = kekayaanBersih >= 0 ? [240, 253, 244] : [254, 242, 242];
+                        data.cell.styles.textColor = kekayaanBersih >= 0 ? [22, 101, 52] : [153, 27, 27];
+                    }
+                },
+                margin: { left: 14, right: 14 }
+            });
+            y = doc.lastAutoTable.finalY + 8;
+
+            // Modal per Kategori
+            doc.setFontSize(11); doc.setFont(undefined, 'bold');
+            doc.text('MODAL PER KATEGORI PRODUK', 14, y); y += 4;
+            var katBody = Object.keys(kategoriMap).sort(function(a,b){ return kategoriMap[b].modal - kategoriMap[a].modal; }).map(function(k) {
+                var pct = totalModalStok > 0 ? Math.round((kategoriMap[k].modal / totalModalStok) * 100) : 0;
+                return [k, kategoriMap[k].qty + ' unit', formatRp(kategoriMap[k].modal), pct + '%'];
+            });
+            katBody.push(['TOTAL', '', formatRp(totalModalStok), '100%']);
+            doc.autoTable({
+                startY: y, head: [['Kategori', 'Stok', 'Nilai Modal', 'Porsi']],
+                body: katBody, theme: 'striped',
+                headStyles: { fillColor: [79, 70, 229], fontSize: 9 },
+                bodyStyles: { fontSize: 9 },
+                didParseCell: function(data) {
+                    if (data.row.index === katBody.length - 1) {
+                        data.cell.styles.fontStyle = 'bold';
+                        data.cell.styles.fillColor = [237, 233, 254];
+                    }
+                },
+                margin: { left: 14, right: 14 }
+            });
+            y = doc.lastAutoTable.finalY + 8;
+
+            // Hutang Piutang
+            var hpAktif = hutangPiutangList.filter(function(h){ return h.status !== 'lunas'; });
+            if (hpAktif.length > 0) {
+                if (y > 220) { doc.addPage(); y = 20; }
+                doc.setFontSize(11); doc.setFont(undefined, 'bold');
+                doc.text('HUTANG & PIUTANG AKTIF', 14, y); y += 4;
+                var hpBody = hpAktif.map(function(h) {
+                    var sisa = (h.jumlah || 0) - (h.sudahDibayar || 0);
+                    return [h.nama, h.tipe === 'supplier' ? 'Hutang Supplier' : 'Piutang Pelanggan',
+                        (h.tipe === 'supplier' ? '−' : '+') + formatRp(sisa).replace('Rp\u00a0','Rp '),
+                        h.jatuhTempo || '—'];
+                });
+                doc.autoTable({
+                    startY: y, head: [['Nama', 'Tipe', 'Sisa', 'Jatuh Tempo']],
+                    body: hpBody, theme: 'striped',
+                    headStyles: { fillColor: [79, 70, 229], fontSize: 9 },
+                    bodyStyles: { fontSize: 9 },
+                    margin: { left: 14, right: 14 }
+                });
+            }
+
+            // Footer
+            var pageCount = doc.internal.getNumberOfPages();
+            for (var i = 1; i <= pageCount; i++) {
+                doc.setPage(i);
+                doc.setFontSize(8); doc.setTextColor(150);
+                doc.text(namaTokoStruk + ' | Neraca Modal | Hal ' + i + '/' + pageCount, 14, 290);
+            }
+            doc.save('Neraca_Modal_' + namaTokoStruk.replace(/\s/g,'_') + '_' + now.toLocaleDateString('id-ID').replace(/\//g,'-') + '.pdf');
         }
 
         function handleLaporanSearch(e) {
@@ -6818,7 +7414,7 @@
 
             return '<div class="space-y-4">'
                 // Header cards
-                + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">'
+                + '<div class="hutang-cards-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">'
                 + '<div style="background:#fff;border:1px solid #fee2e2;border-radius:12px;padding:14px 16px;">'
                 + '<p style="font-size:11px;color:#9ca3af;margin-bottom:4px;">Total '+(tab==='pelanggan'?'Piutang':'Hutang')+'</p>'
                 + '<p style="font-size:18px;font-weight:800;color:#dc2626;">'+formatRp(totalSisa)+'</p></div>'
@@ -7130,260 +7726,227 @@
         var _faqPerPage = 5;
 
         function getFaqHTML() {
-            var faqs = [
+            var isAdmin = currentUser && currentUser.role === 'admin';
+
+            // role: 'all' = semua user, 'admin' = admin saja
+            var allFaqs = [
 
                 // ═══════════════════════════════════════════════
                 //  PANDUAN MEMULAI
                 // ═══════════════════════════════════════════════
-
                 {
-                    icon: 'ph-monitor', color: '#0284c7',
+                    role: 'all', icon: 'ph-monitor', color: '#0284c7',
                     title: '🖥️ Cara Pakai di Desktop (PC / Laptop)',
-                    desc: 'Tampilan desktop Z-TRONIK dirancang untuk layar lebar (1024px ke atas) dengan skala 85%. Layout terdiri dari: (A) Sidebar kiri — menu navigasi, klik ikon ☰ di header untuk menyembunyikan/membuka sidebar. (B) Header atas — nama menu aktif, tombol Refresh data, dan info user yang login. (C) Area konten utama — tampilan halaman yang aktif. Di menu Penjualan (POS) desktop: panel kiri atas menampilkan keranjang belanja (tabel produk yang dipilih), di bawahnya ada daftar produk 2 kolom (5 kiri + 5 kanan per halaman), dan panel kanan menampilkan ringkasan belanja, pilihan metode bayar, dan tombol checkout. Navigasi antar menu cukup klik nama menu di sidebar.'
+                    desc: 'Layout desktop Z-TRONIK terdiri dari tiga bagian utama: (A) Sidebar kiri — menu navigasi. Klik ikon ☰ di header untuk menyembunyikan atau membuka sidebar. (B) Header atas — nama menu aktif, tombol Refresh, dan info user yang login. (C) Area konten utama — tampilan halaman yang sedang aktif. Di menu Penjualan (POS) desktop: panel kiri atas menampilkan keranjang belanja, di bawahnya daftar produk 2 kolom, dan panel kanan menampilkan ringkasan belanja, metode bayar, dan tombol checkout. Navigasi antar menu cukup klik nama di sidebar.'
                 },
                 {
-                    icon: 'ph-device-mobile', color: '#7c3aed',
+                    role: 'all', icon: 'ph-device-mobile', color: '#7c3aed',
                     title: '📱 Cara Pakai di Mobile (HP / Tablet)',
-                    desc: 'Tampilan mobile Z-TRONIK otomatis menyesuaikan layar kecil. Perbedaan utama dari desktop: (A) Sidebar tersembunyi secara default — ketuk ikon ☰ di pojok kiri atas untuk membuka, ketuk area gelap di luar untuk menutup. (B) Font sedikit lebih kecil (13px) dan padding lebih rapat untuk efisiensi ruang. (C) Di menu Penjualan (POS mobile): ada dua tab di bagian atas — tab "Produk" untuk memilih produk, tab "Keranjang" untuk melihat keranjang dan checkout. Beralih antar tab dengan mengetuk tombolnya. Saat produk pertama ditambahkan, otomatis berpindah ke tab Keranjang. (D) Di tab Keranjang mobile, ada tombol "Tambah Produk Lagi" untuk kembali ke tab Produk. Semua fitur desktop tersedia di mobile kecuali beberapa kolom tabel yang disembunyikan untuk menghemat ruang.'
+                    desc: 'Tampilan mobile Z-TRONIK otomatis menyesuaikan layar kecil. Perbedaan dari desktop: (A) Sidebar tersembunyi secara default — ketuk ikon ☰ di pojok kiri atas untuk membuka, ketuk area gelap di luar untuk menutup. (B) Di menu Penjualan (POS mobile): ada dua tab di bagian atas — tab "Produk" untuk memilih produk, tab "Keranjang" untuk melihat keranjang dan checkout. Saat produk pertama ditambahkan, otomatis berpindah ke tab Keranjang. (C) Ketuk "Tambah Produk Lagi" untuk kembali ke tab Produk. Semua fitur desktop tersedia di mobile.'
                 },
                 {
-                    icon: 'ph-sign-in', color: '#059669',
+                    role: 'all', icon: 'ph-sign-in', color: '#16a34a',
                     title: '🔑 Login & Logout',
-                    desc: 'Login: Buka aplikasi di browser → masukkan username dan password → klik Masuk atau tekan Enter. Tersedia animasi loading 2 detik setelah login berhasil. Terdapat dua jenis akun: (1) Admin — akses penuh ke semua menu termasuk Produk, Pengaturan, Karyawan, Stock Opname. (2) Karyawan — akses terbatas ke Dashboard, Penjualan, Pelanggan, Poin & Reward, Laporan, Clerek, dan FAQ. Logout: klik tombol "Keluar" di bagian bawah sidebar → konfirmasi → animasi loading 2 detik → kembali ke halaman login. Sesi login tersimpan di sessionStorage browser, artinya jika tab ditutup dan dibuka kembali dalam sesi yang sama, tidak perlu login ulang.'
+                    desc: 'Login: Buka aplikasi di browser, masukkan username dan password, lalu klik Masuk atau tekan Enter. Ada dua jenis akun: (1) Admin — akses penuh ke semua menu. (2) Karyawan — akses terbatas ke menu operasional sehari-hari (Dashboard, Penjualan, Pelanggan, Poin & Reward, Laporan, Clerek, dan FAQ). Logout: klik tombol "Keluar" di bagian bawah sidebar, konfirmasi, lalu kembali ke halaman login. Sesi login terjaga selama tab browser tidak ditutup.'
                 },
-
-                // ═══════════════════════════════════════════════
-                //  MENU UTAMA
-                // ═══════════════════════════════════════════════
                 {
-                    icon: 'ph-squares-four', color: '#16a34a',
+                    role: 'all', icon: 'ph-squares-four', color: '#0891b2',
                     title: '📊 Dashboard',
-                    desc: 'Halaman utama berisi ringkasan bisnis real-time: (1) Omzet Hari Ini — total penjualan transaksi hari ini. (2) Transaksi Hari Ini — jumlah transaksi yang sudah diproses. (3) Total Member — jumlah pelanggan terdaftar. (4) Peringatan Stok — produk yang stoknya di bawah batas minimal (badge merah). (5) Grafik Penjualan 7 Hari — bar chart otomatis dari data transaksi, bar hari ini berwarna hijau tua. (6) Top 5 Produk Terjual — produk dengan qty terjual terbanyak sepanjang masa. (7) Daftar Stok Menipis — produk dengan stok di bawah minimal beserta tombol unduh PDF. Klik "Laporan Lengkap" di grafik untuk langsung ke menu Laporan.'
-                },
-                {
-                    icon: 'ph-shopping-cart', color: '#0284c7',
-                    title: '🛒 Penjualan / Kasir (POS) — Desktop',
-                    desc: 'Alur transaksi di desktop: (1) Pastikan shift sudah dibuka di menu Clerek. (2) Di panel kiri bawah: cari produk via kolom pencarian atau filter kategori — tampil 5 produk kiri + 5 kanan per halaman. (3) Klik nama produk untuk langsung menambah ke keranjang di tabel atas. (4) Di tabel keranjang (atas panel kiri): tampil 4 baris, bisa scroll jika lebih. Gunakan tombol +/− untuk ubah qty, klik × untuk hapus. (5) Di panel kanan: pilih member (opsional, ketik ID/No.HP lalu Enter), atur diskon tambahan (Rp atau %), lihat ringkasan total, pilih metode bayar (Tunai/QRIS/Kartu). (6) Klik "PROSES PEMBAYARAN" → masukkan nominal bayar (jika tunai) → konfirmasi → struk otomatis tercetak. Tombol Refresh di header untuk memuat ulang data terbaru.'
-                },
-                {
-                    icon: 'ph-shopping-bag', color: '#0369a1',
-                    title: '🛒 Penjualan / Kasir (POS) — Mobile',
-                    desc: 'Alur transaksi di mobile: (1) Buka shift di menu Clerek terlebih dahulu. (2) Tab "Produk" aktif secara default — tampil daftar produk dalam 2 kolom. Ketuk produk untuk tambah ke keranjang, aplikasi otomatis pindah ke tab Keranjang setelah produk pertama ditambahkan. (3) Tab "Keranjang" — tampil daftar produk yang dipilih, ringkasan total, pilih member, atur diskon, pilih metode bayar. (4) Ketuk "Tambah Produk Lagi" untuk balik ke tab Produk. (5) Ketuk "PROSES PEMBAYARAN" untuk menyelesaikan transaksi. (6) Scan barcode: ketuk tombol "Scan" di toolbar produk, izinkan akses kamera, arahkan ke barcode — produk otomatis masuk keranjang. Total belanja selalu tampil di header atas untuk referensi cepat.'
-                },
-                {
-                    icon: 'ph-package', color: '#7c3aed',
-                    title: '📦 Produk Saya',
-                    desc: 'Manajemen katalog produk dan layanan toko. Cara tambah produk baru: klik tombol "+ Tambah Produk" → isi form: ID/SKU (otomatis), Barcode (opsional, bisa scan kamera), Nama Produk, Kategori, Harga Modal, Harga Jual, Harga Grosir + Min Beli Grosir (opsional, untuk harga khusus qty besar), Nominal Promo (potongan harga otomatis), Tipe Stok (centang "Unlimited" jika produk tidak perlu manajemen stok — cocok untuk layanan/jasa), Stok Real + Stok Minimal (batas peringatan), Poin per Unit (poin bonus per produk untuk member) → klik Simpan. Edit produk: klik ikon pensil. Hapus: klik ikon tempat sampah. Ubah stok cepat: klik ikon stack (+/-) tanpa perlu buka form edit. Produk Unlimited ditampilkan dengan badge ∞ ungu — tidak muncul di peringatan stok.'
-                },
-                {
-                    icon: 'ph-users', color: '#0891b2',
-                    title: '👥 Pelanggan / Member',
-                    desc: 'Kelola database pelanggan untuk program loyalitas. Cara tambah member baru: klik "+ Tambah Pelanggan" → isi Nama, No. HP, Email (opsional), Alamat (opsional) → simpan. ID member (format ZTR0000001) dibuat otomatis. Saat transaksi di kasir: ketik ID member atau No. HP di kolom pencarian member → Enter → data member muncul lengkap dengan poin aktif. Member mendapat poin setiap transaksi sesuai aturan di menu Poin & Reward. Poin bisa ditukar sebagai potongan harga saat checkout. Tier member (Bronze/Silver/Gold/Platinum) naik otomatis sesuai akumulasi poin. Di mobile: tampilan member card muncul di tab Keranjang setelah member berhasil dipilih.'
-                },
-                {
-                    icon: 'ph-clipboard-text', color: '#b45309',
-                    title: '📋 Stock Opname',
-                    desc: 'Penghitungan dan penyesuaian stok fisik. Cara pakai: (1) Klik "Mulai Stock Opname" → sistem mencatat stok awal saat ini sebagai titik referensi. (2) Hitung stok fisik di lapangan untuk setiap produk. (3) Masukkan jumlah aktual di kolom "Stok Aktual" — selisih dengan stok sistem otomatis dihitung dan ditampilkan (+/−). (4) Gunakan kolom pencarian untuk menemukan produk tertentu. (5) Klik "Selesaikan & Simpan" → semua stok diperbarui sesuai stok aktual. (6) Tersedia tombol unduh PDF laporan selisih. Produk unlimited tidak muncul di stock opname karena tidak perlu manajemen stok.'
-                },
-                {
-                    icon: 'ph-star', color: '#d97706',
-                    title: '⭐ Poin & Reward',
-                    desc: 'Sistem loyalitas pelanggan dengan 3 tab: (1) Tab "Aturan Poin" — atur nilai konversi poin (misal: setiap belanja Rp 10.000 = 1 poin, atau 1 poin = Rp 100 potongan), atur poin per produk di menu Produk Saya. (2) Tab "Reward" — tambah hadiah yang bisa ditukar poin: nama reward, foto, jumlah poin yang dibutuhkan. (3) Tab "Poin Pelanggan" — lihat semua pelanggan beserta poin aktif, akumulasi poin sepanjang masa, tier (Bronze < 100, Silver 100-499, Gold 500-1999, Platinum ≥ 2000), dan riwayat transaksi. Cara redeem poin saat kasir: setelah pilih member, masukkan jumlah poin yang ingin ditukar di kolom redeem → nilai potongan muncul otomatis. Tombol "Gunakan semua poin" untuk pakai semua poin sekaligus.'
-                },
-                {
-                    icon: 'ph-file-text', color: '#059669',
-                    title: '📄 Laporan Transaksi',
-                    desc: 'Riwayat lengkap semua transaksi. Filter tersedia: Hari Ini, 7 Hari Terakhir, Bulan Ini, atau Semua. Ringkasan di bagian atas menampilkan total omzet, jumlah transaksi, dan total nilai refund. Setiap baris transaksi menampilkan: No. Transaksi, Tanggal & Jam, Produk yang dibeli, Nama Member (jika ada), Metode Bayar, dan Total. Aksi per transaksi: (A) Struk — preview teks struk lalu cetak ulang. (B) PDF — unduh struk dalam format PDF. (C) Batalkan — batalkan sebagian atau seluruh produk dalam transaksi (memerlukan password pembatalan). Transaksi yang sudah dibatalkan ditandai dengan latar merah dan label "Dibatalkan". Di mobile: tabel bisa di-scroll horizontal untuk melihat semua kolom.'
-                },
-                {
-                    icon: 'ph-gear', color: '#475569',
-                    title: '⚙️ Pengaturan Sistem',
-                    desc: 'Konfigurasi lengkap aplikasi (hanya admin): (1) Pengaturan Toko — nama toko (muncul di struk & login), alamat 2 baris, no HP (otomatis awalan 0), pesan footer struk. Semua tersimpan otomatis. (2) Foto QRIS — upload gambar QRIS untuk muncul saat pembayaran QRIS. (3) Kredensial Admin — ubah username dan password login admin. (4) Password Pembatalan — password khusus untuk memverifikasi pembatalan transaksi, berlaku untuk semua user. (5) Pembersihan Data — hapus transaksi lama (lebih dari N hari) secara manual untuk menjaga performa. Data poin member tidak ikut terhapus. Semua perubahan pengaturan langsung tersimpan saat tombol Simpan diklik.'
-                },
-                {
-                    icon: 'ph-user-circle-gear', color: '#9333ea',
-                    title: '👤 Manajemen Karyawan (Admin Only)',
-                    desc: 'Kelola akun login karyawan — hanya dapat diakses oleh admin. Cara tambah karyawan: klik "+ Tambah Karyawan" → isi Nama, Username (unik), Password, No. HP, Email, Alamat → Simpan. Karyawan bisa langsung login dengan akun tersebut. Hak akses karyawan: Dashboard, Penjualan, Pelanggan, Poin & Reward, Laporan, Clerek (Shift), dan FAQ. Menu yang tidak dapat diakses karyawan: Produk Saya, Stock Opname, Pengaturan, dan Karyawan. Edit karyawan: klik ikon pensil. Hapus: klik ikon tempat sampah → konfirmasi. Karyawan yang dihapus tidak bisa login lagi. Perubahan data karyawan langsung tersimpan di sistem.'
-                },
-                {
-                    icon: 'ph-user-check', color: '#0369a1',
-                    title: '🕐 Clerek — Manajemen Shift',
-                    desc: 'Sistem manajemen shift kasir harian. Alur shift: (1) Buka Shift — masukkan kas awal (uang di laci kasir), konfirmasi, klik "Mulai Shift" → animasi loading 2 detik → shift tercatat di sistem. Karyawan WAJIB buka shift sebelum bisa akses menu Penjualan. (2) Selama shift aktif: catat Mutasi Kas (pemasukan/pengeluaran kas di luar transaksi penjualan, misal: pembelian modal, penarikan kas). Tambah catatan/to-do untuk shift berikutnya. (3) Tutup Shift — masukkan kas akhir (hitung uang di laci), konfirmasi → animasi loading 2 detik → sistem menghitung selisih kas dan omzet. (4) Riwayat Shift — lihat semua shift sebelumnya beserta kas awal, kas akhir, omzet, dan selisih. Admin: bisa "Ambil Alih Shift" aktif karyawan untuk akses Penjualan tanpa tutup shift.'
+                    desc: 'Halaman utama berisi ringkasan bisnis real-time: (1) Omzet Hari Ini — total penjualan hari ini. (2) Transaksi Hari Ini — jumlah transaksi yang sudah diproses. (3) Total Member — jumlah pelanggan terdaftar. (4) Peringatan Stok — produk yang stoknya di bawah batas minimal. (5) Grafik Penjualan 7 Hari — bar chart otomatis, bar hari ini berwarna hijau tua. (6) Top 5 Produk Terjual — produk dengan jumlah terjual terbanyak. (7) Daftar Stok Menipis — produk yang perlu segera direstok. Klik "Laporan Lengkap" di grafik untuk langsung ke menu Laporan.'
                 },
 
                 // ═══════════════════════════════════════════════
-                //  FITUR KHUSUS
+                //  PENJUALAN / POS
                 // ═══════════════════════════════════════════════
                 {
-                    icon: 'ph-printer', color: '#374151',
-                    title: '🖨️ Cetak Struk (58mm)',
-                    desc: 'Struk dicetak otomatis setelah setiap transaksi selesai menggunakan printer thermal 58mm. Isi struk: nama toko (font besar), alamat (2 baris, rata tengah), no telp, garis pemisah, no transaksi, tanggal & jam, kasir, nama member & ID (jika ada), daftar produk (nama + qty × harga + total), subtotal, diskon, total, metode bayar, tunai & kembalian (jika tunai), garis pemisah, pesan footer. Cetak ulang dari Laporan: klik tombol "Struk" → preview teks muncul di modal → klik "Cetak". Teknis: sistem menggunakan hidden iframe untuk cetak agar tidak diblokir popup blocker browser. Pastikan browser mengizinkan print dari aplikasi. Di mobile: setelah klik cetak, dialog print sistem akan muncul — pilih printer yang terhubung.'
+                    role: 'all', icon: 'ph-shopping-cart', color: '#dc2626',
+                    title: '🛒 Cara Transaksi di Kasir (POS) — Desktop',
+                    desc: 'Alur transaksi desktop: (1) Pastikan shift sudah dibuka di menu Clerek. (2) Cari produk dengan mengetik nama atau barcode di kolom pencarian, atau klik langsung dari grid produk. (3) Produk masuk ke keranjang — ubah qty dengan klik +/−. (4) Opsional: pilih member, atur diskon tambahan (Rp atau %), redeem poin. (5) Pilih metode bayar: Tunai, QRIS, atau Kartu. (6) Klik "Proses Pembayaran" → isi nominal (jika Tunai) → konfirmasi → struk otomatis tampil dan bisa dicetak. Transaksi tersimpan otomatis ke riwayat laporan.'
                 },
                 {
-                    icon: 'ph-barcode', color: '#0f766e',
+                    role: 'all', icon: 'ph-device-mobile', color: '#7c3aed',
+                    title: '🛒 Cara Transaksi di Kasir (POS) — Mobile',
+                    desc: 'Alur transaksi mobile: (1) Buka shift di menu Clerek terlebih dahulu. (2) Tab "Produk" aktif secara default — ketuk produk untuk tambah ke keranjang, aplikasi otomatis pindah ke tab Keranjang. (3) Di tab Keranjang: lihat daftar produk dipilih, atur qty, pilih member, atur diskon, pilih metode bayar. (4) Ketuk "Tambah Produk Lagi" untuk kembali ke tab Produk. (5) Ketuk "PROSES PEMBAYARAN" untuk menyelesaikan transaksi. Scan barcode: ketuk tombol "Scan" di toolbar produk, izinkan akses kamera, arahkan ke barcode — produk otomatis masuk keranjang.'
+                },
+                {
+                    role: 'all', icon: 'ph-camera', color: '#0891b2',
                     title: '📷 Scan Barcode / QR Code',
-                    desc: 'Fitur scan tersedia di 2 tempat: (A) Menu Penjualan — tombol "Scan" di toolbar pencarian. Setelah scan berhasil, produk langsung masuk keranjang. (B) Form Produk Saya — tombol kamera di field Barcode saat tambah/edit produk. Cara pakai: klik tombol Scan → browser meminta izin kamera → izinkan → arahkan kamera ke barcode/QR code → sistem otomatis mengenali dan menutup scanner. Tips desktop: gunakan webcam yang menghadap ke depan. Tips mobile: gunakan kamera belakang (default). Jika kamera tidak bisa diakses: pastikan browser mendapat izin kamera di pengaturan situs, gunakan HTTPS bukan HTTP. Barcode yang didukung: hampir semua format (QR Code, Code128, EAN, UPC, dll).'
+                    desc: 'Z-TRONIK bisa scan barcode langsung dari kamera HP atau webcam laptop. Cara pakai: (1) Di menu Penjualan, klik tombol "Scan" (ikon kamera) di toolbar pencarian produk. (2) Izinkan akses kamera saat browser meminta. (3) Arahkan kamera ke barcode produk — produk otomatis terdeteksi dan masuk keranjang. (4) Klik tombol X untuk menutup scanner. Scan barcode juga tersedia di form tambah/edit produk untuk mengisi barcode produk secara otomatis. Jika kamera tidak bisa diakses, klik ikon kunci/info di address bar browser dan berikan izin kamera.'
                 },
                 {
-                    icon: 'ph-infinity', color: '#7c3aed',
-                    title: '♾️ Produk Unlimited (Tanpa Stok)',
-                    desc: 'Fitur Unlimited cocok untuk produk layanan/jasa yang tidak memiliki stok fisik, seperti: pulsa, token listrik, jasa print, pengiriman, dll. Cara mengaktifkan: buka form tambah/edit produk → centang checkbox "Unlimited (tanpa stok)" → field Stok Real dan Stok Minimal otomatis tersembunyi. Produk unlimited: (A) Tidak ada batas qty saat ditambah ke keranjang — bisa tambah berapa saja. (B) Tidak muncul di peringatan stok menipis di Dashboard dan sidebar. (C) Tidak perlu dimasukkan dalam Stock Opname. (D) Badge stok di grid POS tampil sebagai ∞ berwarna ungu. (E) Saat refund/pembatalan, stok tidak ikut dikembalikan (karena memang tidak ada stok). '
+                    role: 'all', icon: 'ph-receipt', color: '#16a34a',
+                    title: '🖨️ Cetak Struk (58mm)',
+                    desc: 'Struk dicetak otomatis setelah setiap transaksi selesai menggunakan printer thermal 58mm. Isi struk: nama toko, alamat, no telp, no transaksi, tanggal & jam, kasir, nama member & ID (jika ada), daftar produk beserta harga, subtotal, diskon, total, metode bayar, kembalian (jika tunai), pesan footer. Cetak ulang dari Laporan: klik tombol "Struk" pada baris transaksi, preview muncul, lalu klik "Cetak". Jika struk tidak rapi: di dialog print, set paper size ke 58mm atau pilih "Thermal Paper".'
                 },
                 {
-                    icon: 'ph-arrow-u-up-left', color: '#dc2626',
-                    title: '↩️ Batalkan / Refund Transaksi',
-                    desc: 'Cara membatalkan transaksi: (1) Buka menu Laporan → temukan transaksi yang ingin dibatalkan. (2) Klik tombol merah "Batalkan". (3) Muncul daftar semua produk dalam transaksi — centang produk yang ingin dibatalkan (bisa sebagian atau semua). (4) Masukkan Password Pembatalan (diatur di menu Pengaturan). (5) Klik "Batalkan". Hasil: stok produk yang dibatalkan otomatis dikembalikan (kecuali produk Unlimited). Jika semua produk dibatalkan, transaksi ditandai "Dibatalkan" (full refund). Jika sebagian, total transaksi dikurangi. Transaksi yang sudah dibatalkan tidak bisa dibatalkan lagi. Catatan: stok dan data transaksi otomatis diperbarui di sistem.'
-                },
-                {
-                    icon: 'ph-tag', color: '#ea580c',
+                    role: 'all', icon: 'ph-currency-circle-dollar', color: '#d97706',
                     title: '💰 Diskon & Harga Grosir',
-                    desc: 'Z-TRONIK mendukung 3 jenis diskon/harga khusus: (1) Promo Produk — potongan harga tetap per produk (Rp), diatur di form Produk Saya kolom "Nominal Promo". Berlaku otomatis untuk semua pembeli, ditampilkan sebagai badge "Promo" di keranjang. (2) Harga Grosir — harga khusus untuk pembelian qty ≥ Min Beli Grosir, diatur di form produk. Badge "Grosir" muncul otomatis di keranjang saat qty memenuhi syarat. (3) Diskon Tambahan per Transaksi — diatur langsung di panel keranjang saat checkout, bisa pilih mode Rp (nominal tetap) atau % (persentase dari subtotal). Ketiga diskon bisa dikombinasikan. Urutan perhitungan: Harga Grosir/Promo per produk → subtotal → Diskon Tambahan → Redeem Poin → Grand Total.'
+                    desc: 'Z-TRONIK mendukung 3 jenis diskon: (1) Promo Produk — potongan harga tetap (Rp) per produk, berlaku otomatis untuk semua pembeli. (2) Harga Grosir — harga khusus untuk pembelian qty di atas batas minimum yang diatur. Badge "Grosir" muncul otomatis saat qty memenuhi syarat. (3) Diskon Tambahan per Transaksi — diatur saat checkout di panel keranjang, bisa mode Rp atau %. Urutan perhitungan: Harga Grosir/Promo per produk → subtotal → Diskon Tambahan → Redeem Poin → Grand Total. Ketiga diskon bisa dikombinasikan.'
                 },
                 {
-                    icon: 'ph-credit-card', color: '#2563eb',
+                    role: 'all', icon: 'ph-credit-card', color: '#2563eb',
                     title: '💳 Metode Pembayaran',
-                    desc: 'Z-TRONIK mendukung 3 metode bayar: (1) Tunai — masukkan nominal uang yang diterima, sistem otomatis hitung kembalian. Struk menampilkan baris Tunai dan Kembali. (2) QRIS — gambar QRIS yang diupload di Pengaturan tampil di layar kasir untuk dipindai pelanggan. Setelah konfirmasi, transaksi selesai. (3) Kartu — untuk pembayaran kartu debit/kredit via EDC, sistem hanya mencatat tanpa proses kartu (EDC terpisah). Semua metode bayar tercatat di laporan dan struk. Untuk ganti metode: klik tombol pilihan metode di panel keranjang sebelum klik Proses Pembayaran. Default metode: Tunai.'
+                    desc: 'Z-TRONIK mendukung 3 metode bayar: (1) Tunai — masukkan nominal uang diterima, sistem otomatis hitung kembalian. (2) QRIS — gambar QRIS yang diupload di Pengaturan tampil di layar kasir untuk dipindai pelanggan. (3) Kartu — untuk pembayaran via EDC, sistem mencatat transaksi (EDC digunakan secara terpisah). Semua metode tercatat di laporan dan struk. Untuk ganti metode: klik pilihan metode di panel keranjang sebelum klik Proses Pembayaran.'
                 },
 
+                // ═══════════════════════════════════════════════
+                //  PRODUK & STOK
+                // ═══════════════════════════════════════════════
                 {
-                    icon: 'ph-shield-check', color: '#16a34a',
-                    title: '🔒 Keamanan & Hak Akses',
-                    desc: 'Z-TRONIK memiliki 2 level akses: (1) Admin — akses penuh semua menu, termasuk Pengaturan, Produk, Karyawan, Stock Opname. Bisa ambil alih shift karyawan. (2) Karyawan — akses terbatas: Dashboard, Penjualan, Pelanggan, Poin & Reward, Laporan, Clerek, FAQ. Tidak bisa akses menu sensitif. Keamanan tambahan: Password Pembatalan Transaksi — password terpisah khusus untuk membatalkan transaksi, berbeda dengan password login. Diatur di menu Pengaturan. Tips keamanan: (A) Ganti password admin default (user13) segera setelah setup. (B) Berikan akun karyawan hanya untuk kasir yang perlu. (C) Hapus akun karyawan yang sudah tidak bekerja. (D) Password pembatalan jangan sama dengan password login.'
-                },
-
-
-
-                // ═══ DETAIL FITUR LANJUTAN ═══
-                {
-                    icon: 'ph-tag', color: '#dc2626',
-                    title: '🏷️ Cara Atur Harga Grosir',
-                    desc: 'Harga grosir adalah harga spesial yang berlaku otomatis jika pelanggan membeli dalam jumlah tertentu. Cara mengatur: (1) Produk Saya → Tambah/Edit produk. (2) Isi "Harga Grosir (Rp)" — contoh: Rp 9.500. (3) Isi "Min Beli Grosir (Unit)" — contoh: 10. (4) Simpan. Cara kerja: saat pelanggan beli produk tersebut 10 unit atau lebih, harga per unit otomatis berubah ke Rp 9.500. Di keranjang muncul badge oranye "Grosir". Jika qty turun di bawah minimum, harga kembali ke normal. Min Beli 0 berarti harga grosir tidak aktif.'
+                    role: 'admin', icon: 'ph-package', color: '#7c3aed',
+                    title: '📦 Produk Saya — Kelola Katalog',
+                    desc: 'Cara tambah produk baru: klik "+ Tambah Produk" → isi form: ID/SKU (otomatis), Barcode (opsional, bisa scan kamera), Nama Produk, Kategori, Harga Modal, Harga Jual, Harga Grosir + Min Beli Grosir (opsional), Nominal Promo (potongan harga otomatis), Tipe Stok (centang "Unlimited" jika tidak perlu manajemen stok — cocok untuk jasa/layanan), Stok Real + Stok Minimal (batas peringatan), Poin per Unit (poin bonus per produk untuk member) → klik Simpan. Edit produk: klik ikon pensil. Hapus: klik ikon tempat sampah. Ubah stok cepat: klik ikon stack (+).'
                 },
                 {
-                    icon: 'ph-percent', color: '#dc2626',
-                    title: '💸 Cara Beri Diskon Saat Transaksi',
-                    desc: 'Ada dua jenis diskon di Z-TRONIK: (1) Diskon Per Produk (Promo) — diatur di form produk, berlaku permanen untuk setiap transaksi produk tersebut. (2) Diskon Tambahan Per Transaksi — diatur saat checkout di panel keranjang kanan. Cara pakai diskon tambahan: di bagian "Ringkasan Belanja" klik tombol "Rp" atau "%" untuk ganti tipe diskon, lalu isi angkanya. Contoh: diskon Rp 5.000 artinya total dikurangi Rp 5.000. Diskon 10% artinya total dikurangi 10% dari subtotal. Kedua jenis diskon bisa digabung.'
+                    role: 'admin', icon: 'ph-infinity', color: '#7c3aed',
+                    title: '♾️ Produk Unlimited (Tanpa Stok)',
+                    desc: 'Fitur Unlimited cocok untuk produk layanan/jasa tanpa stok fisik, seperti pulsa, token listrik, jasa print, dll. Cara aktifkan: form tambah/edit produk → centang "Unlimited (tanpa stok)". Produk unlimited: (A) Tidak ada batas qty saat ditambah ke keranjang. (B) Tidak muncul di peringatan stok menipis. (C) Tidak perlu dimasukkan dalam Stock Opname. (D) Badge stok di grid POS tampil sebagai ∞ ungu. (E) Saat pembatalan transaksi, stok tidak ikut dikembalikan.'
                 },
                 {
-                    icon: 'ph-star-four', color: '#d97706',
+                    role: 'admin', icon: 'ph-stack-plus', color: '#0891b2',
+                    title: '📥 Cara Tambah Stok / Restok',
+                    desc: 'Ada 3 cara menambah stok: (1) Quick Stock Update — di menu Produk Saya, klik ikon stack (+) pada produk, masukkan jumlah penambahan, klik Tambah. Langsung tersimpan. (2) Edit Produk — klik ikon pensil, ubah angka di field "Stok Real", Simpan. (3) Stock Opname — cocok untuk restok banyak produk sekaligus atau setelah penghitungan fisik. Stok produk unlimited tidak perlu diupdate karena selalu tersedia tanpa batas.'
+                },
+                {
+                    role: 'admin', icon: 'ph-tag', color: '#16a34a',
+                    title: '🏷️ Kategori Produk',
+                    desc: 'Kategori produk membantu mengelompokkan produk di daftar dan laporan. Cara kelola: buka form tambah/edit produk → klik tombol "Kategori" di pojok kanan atas form → muncul panel kelola kategori (tambah dan hapus). Cara pilih kategori: klik dropdown Kategori, pilih dari daftar yang ada, atau pilih "+ Tambah kategori baru...", ketik nama, lalu klik ikon simpan. Kategori yang disimpan akan muncul sebagai pilihan di semua produk berikutnya dan tersimpan permanen di sistem.'
+                },
+                {
+                    role: 'admin', icon: 'ph-clipboard-text', color: '#0891b2',
+                    title: '📋 Stock Opname',
+                    desc: 'Stock Opname digunakan untuk mencocokkan stok sistem dengan stok fisik di toko. Cara pakai: (1) Buka menu Stock Opname → klik "Mulai SO". (2) Isi stok aktual setiap produk sesuai hasil hitungan fisik. (3) Klik "Akhiri SO & Lihat Laporan". (4) Sistem menampilkan selisih antara stok sistem dan stok aktual. (5) Klik "Update Stok" untuk menyimpan stok aktual ke sistem. Laporan SO bisa diunduh sebagai PDF. Stock Opname sebaiknya dilakukan secara berkala untuk memastikan akurasi stok.'
+                },
+                {
+                    role: 'admin', icon: 'ph-arrows-counter-clockwise', color: '#dc2626',
+                    title: '↩️ Batalkan / Refund Transaksi',
+                    desc: 'Cara membatalkan transaksi: (1) Buka menu Laporan → tab Riwayat Transaksi → temukan transaksi yang ingin dibatalkan. (2) Klik tombol merah "Batalkan". (3) Muncul daftar produk dalam transaksi — centang produk yang ingin dibatalkan (bisa sebagian atau semua). (4) Masukkan Password Pembatalan. (5) Klik "Batalkan". Hasil: stok produk yang dibatalkan otomatis dikembalikan (kecuali produk Unlimited). Jika semua produk dibatalkan, transaksi ditandai "Dibatalkan". Transaksi yang sudah dibatalkan tidak bisa dibatalkan lagi.'
+                },
+
+                // ═══════════════════════════════════════════════
+                //  PELANGGAN & POIN
+                // ═══════════════════════════════════════════════
+                {
+                    role: 'all', icon: 'ph-users', color: '#0891b2',
+                    title: '👥 Kelola Pelanggan / Member',
+                    desc: 'Cara tambah member baru: klik "+ Tambah Pelanggan" → isi Nama (wajib), No. HP (wajib), Email dan Alamat (opsional) → Simpan. ID member dibuat otomatis (format ZTR0000001, dst). Cara gunakan member saat transaksi: ketik ID, nama, atau No. HP di kolom pencarian member di kasir → Enter → data member muncul beserta poin aktif. Edit member: klik ikon pensil. Hapus: klik ikon tempat sampah. ID member bisa dicari dengan angka saja — tidak perlu ketik format lengkap.'
+                },
+                {
+                    role: 'all', icon: 'ph-star', color: '#d97706',
+                    title: '⭐ Poin & Reward — Cara Kerja',
+                    desc: 'Sistem loyalitas Z-TRONIK: (1) Member mendapat poin setiap transaksi sesuai aturan yang ditetapkan admin. (2) Poin bisa ditukar sebagai potongan harga saat checkout — ketik jumlah poin di kolom redeem, atau klik "Gunakan Semua". (3) Poin bisa ditukar reward khusus melalui menu Poin & Reward → tab Poin Aktif Pelanggan → tombol "Tukar Poin". (4) Tier member (Bronze/Silver/Gold/Platinum) naik otomatis berdasarkan akumulasi poin historis — tidak berkurang meski poin ditukar. (5) Member dengan hutang aktif tidak mendapat poin dari transaksi.'
+                },
+                {
+                    role: 'all', icon: 'ph-crown', color: '#d97706',
                     title: '🌟 Tier Member: Bronze, Silver, Gold, Platinum',
-                    desc: 'Tier member ditentukan berdasarkan total poin akumulasi sepanjang waktu (bukan poin aktif yang bisa ditukar). Cara lihat/atur tier: menu Poin & Reward → tab "Aturan Poin" → bagian Tier. Setiap tier bisa diatur: nama, batas poin minimum, warna, dan multiplier poin. Contoh: Gold = akumulasi 1.000 poin, multiplier 1.5x artinya poin yang didapat 1.5 kali lipat. Poin akumulasi tidak berkurang meski poin ditukar — reset akumulasi bisa dilakukan manual di menu Poin & Reward. Tier tampil di data pelanggan dan di struk saat transaksi dengan member.'
+                    desc: 'Tier member ditentukan berdasarkan total poin akumulasi sepanjang waktu (bukan poin aktif yang bisa ditukar). Tier ditampilkan di data pelanggan dan di struk transaksi. Poin akumulasi tidak berkurang meski poin ditukar — hanya poin aktif yang berkurang saat penukaran. Reset akumulasi bisa dilakukan manual oleh admin di menu Poin & Reward (misalnya setelah pembagian THR atau periode tertentu).'
                 },
                 {
-                    icon: 'ph-stack-plus', color: '#059669',
-                    title: '📥 Cara Tambah Stok Produk (Restok)',
-                    desc: 'Ada 3 cara menambah stok: (1) Quick Stock Update — di menu Produk Saya, klik ikon tumpukan (+) pada produk → masukkan jumlah penambahan (contoh: +50) → klik Tambah. Langsung tersimpan. (2) Edit Produk — klik ikon pensil → ubah angka di field "Stok Real" → Simpan. (3) Stock Opname — cocok untuk restok banyak produk sekaligus, atau setelah penghitungan fisik. Stok produk unlimited tidak perlu diupdate — selalu tersedia tanpa batas.'
-                },
-
-                {
-                    icon: 'ph-user-plus', color: '#0891b2',
-                    title: '🆕 Cara Daftarkan Member Baru',
-                    desc: 'Ada dua cara mendaftarkan member: (1) Via menu Pelanggan — klik "+ Tambah Pelanggan" → isi nama (wajib), no HP (wajib), email dan alamat (opsional) → Simpan. ID member dibuat otomatis (ZTR0000001, dst). (2) Langsung saat transaksi — jika pelanggan belum terdaftar, daftarkan dulu di menu Pelanggan, lalu panggil di kasir. Member yang baru didaftarkan bisa langsung digunakan di kasir setelah disimpan dan data di-refresh. ID member bisa dicari berdasarkan No. HP atau angka ID saja (tidak perlu ketik "ZTR").'
+                    role: 'admin', icon: 'ph-gift', color: '#7c3aed',
+                    title: '🎁 Kelola Reward & Aturan Poin (Admin)',
+                    desc: 'Cara atur sistem poin: menu Poin & Reward → tab Aturan Poin → isi nilai konversi poin. Cara tambah reward: tab Reward → isi nama reward, jumlah poin yang dibutuhkan, keterangan → klik Tambah. Reward bisa diurutkan berdasarkan Nama A-Z/Z-A atau Poin ↑/↓. Cara tukar poin member: tab Poin Aktif Pelanggan → klik tombol "Tukar Poin" di baris member → pilih jenis penukaran (diskon tunai atau reward). Poin akumulasi tidak berkurang saat penukaran — hanya poin aktif.'
                 },
 
-
-
+                // ═══════════════════════════════════════════════
+                //  LAPORAN & NERACA
+                // ═══════════════════════════════════════════════
                 {
-                    icon: 'ph-clock', color: '#7c3aed',
-                    title: '⏱️ Animasi Loading — Kapan Muncul',
-                    desc: 'Z-TRONIK menampilkan animasi loading fullscreen (spinner + nama toko) di beberapa kondisi: (1) Login — muncul 2 detik setelah klik Masuk sebelum masuk ke sistem. (2) Logout — muncul 2 detik setelah konfirmasi keluar. (3) Buka Shift — muncul 2 detik setelah konfirmasi mulai shift. (4) Tutup Shift — muncul 2 detik setelah konfirmasi akhiri shift. Tujuannya memberikan feedback visual bahwa sistem sedang memproses, dan memberi jeda sebelum tampilan berubah. Refresh data (klik Refresh di header) tidak menampilkan overlay — hanya ikon refresh berputar di header.'
+                    role: 'all', icon: 'ph-file-text', color: '#0284c7',
+                    title: '📄 Laporan Transaksi',
+                    desc: 'Menu Laporan menyimpan riwayat semua transaksi. Filter periode: Hari Ini, 7 Hari Terakhir, Bulan Ini, 2 Bulan, 3 Bulan, atau Pilih Tanggal sendiri. Ringkasan di atas tabel: Total Omzet, Jumlah Transaksi, Rata-rata per Transaksi, dan Total Dibatalkan. Aksi per transaksi: (A) Struk — preview dan cetak ulang. (B) PDF — unduh struk format PDF. (C) Batalkan — membatalkan transaksi dengan Password Pembatalan. Gunakan kolom pencarian untuk menemukan transaksi berdasarkan no transaksi, nama produk, nama member, atau metode bayar.'
                 },
                 {
-                    icon: 'ph-device-tablet', color: '#16a34a',
-                    title: '📲 Optimasi Z-TRONIK di Tablet (iPad / Android Tab)',
-                    desc: 'Untuk pengalaman terbaik di tablet: (1) Gunakan mode landscape (horizontal) — tampilan lebih lebar dan POS terlihat lebih lengkap. (2) Di Safari iPad: Settings → Safari → Request Desktop Website → All Websites (aktifkan) agar selalu tampil versi desktop. (3) Di Chrome Android tablet: menu ⋮ → "Desktop site" untuk tampilan desktop. (4) Ukuran layar ≥ 10 inci sangat direkomendasikan untuk tampilan desktop POS yang nyaman. (5) Tambahkan ke Home Screen untuk akses cepat. (6) Koneksi WiFi lebih stabil daripada data seluler untuk performa terbaik.'
-                },
-
-                {
-                    icon: 'ph-wrench', color: '#b45309',
-                    title: '🔧 Troubleshooting — Masalah Umum',
-                    desc: 'Solusi masalah yang sering terjadi: (1) Tidak bisa cetak struk — pastikan browser tidak memblokir print, coba klik Cetak di modal preview struk. Di Chrome: Settings → Privacy → Site Settings → izinkan pop-up jika diminta. (2) Kamera tidak bisa scan barcode — izinkan akses kamera di browser (klik ikon kunci/info di address bar → Izin Kamera). (3) Struk tidak rapi saat cetak — di dialog print browser, set paper size ke 58mm atau pilih "Thermal Paper". (4) Login tidak bisa — pastikan username dan password sudah benar, perhatikan huruf kapital. (5) Data tidak muncul setelah Refresh — coba klik tombol Refresh lagi, atau tutup dan buka ulang browser. (6) Produk tidak muncul di POS — pastikan produk sudah ditambahkan di menu Produk Saya dan stok > 0 (atau aktifkan Unlimited).'
+                    role: 'all', icon: 'ph-download-simple', color: '#2563eb',
+                    title: '📄 Export Laporan ke PDF & CSV',
+                    desc: 'Cara export laporan: (1) PDF per transaksi — di Laporan, klik tombol "PDF" pada baris transaksi. (2) Cetak sebagai PDF — klik "Struk" → preview → klik Cetak → di dialog print pilih "Save as PDF". (3) Export rekap PDF — atur filter periode di Laporan lalu klik tombol "PDF" di toolbar. (4) Export CSV — klik tombol "CSV" di toolbar Laporan, buka dengan Excel atau Google Sheets. (5) Laporan stok menipis — di Dashboard klik "Unduh PDF". (6) Laporan Neraca Modal — menu Laporan → tab Neraca Modal → tombol "Unduh PDF" (admin saja).'
                 },
                 {
-                    icon: 'ph-question', color: '#6366f1',
-                    title: '❓ Tips & Pintasan Berguna',
-                    desc: 'Tips penggunaan sehari-hari: (1) Tekan Enter setelah ketik username untuk pindah ke field password, Enter lagi untuk login — tanpa klik mouse. (2) Di POS, ketik nama/barcode di kolom pencarian untuk filter produk instan. (3) Gunakan fitur "Ambil Alih Shift" (admin) jika karyawan lupa tutup shift sebelum pulang. (4) Laporan bisa diunduh sebagai PDF atau CSV — klik tombol PDF/CSV di menu Laporan sesuai filter periode yang aktif. (5) Stok tidak berkurang otomatis setelah transaksi — update stok secara berkala via Stock Opname. (6) Gunakan mode landscape di tablet untuk tampilan POS yang lebih luas. (7) Tambahkan ke home screen HP: Chrome mobile → menu ⋮ → Add to Home Screen — Z-TRONIK terbuka seperti aplikasi native.'
-                },
-                {
-                    icon: 'ph-receipt', color: '#059669',
-                    title: '📄 Cara Export Laporan ke PDF & CSV',
-                    desc: 'Z-TRONIK menyediakan beberapa cara export laporan: (1) PDF per transaksi — di menu Laporan, klik tombol "PDF" pada baris transaksi yang diinginkan. File PDF struk 80mm otomatis diunduh. (2) Preview → Cetak sebagai PDF — klik "Struk" → muncul preview → klik Cetak → di dialog print browser pilih "Save as PDF". (3) Export rekap PDF — di toolbar Laporan, pilih periode filter (Hari Ini, 7 Hari, Bulan Ini, 2 Bulan, 3 Bulan, atau Custom) lalu klik tombol "PDF" untuk mengunduh rekap seluruh transaksi periode tersebut. (4) Export CSV — klik tombol "CSV" di toolbar Laporan untuk file yang bisa dibuka di Excel atau aplikasi tabel lainnya. (5) Laporan stok menipis — di Dashboard klik "Unduh PDF" di kartu Stok Menipis.'
-                },
-                {
-                    icon: 'ph-file-pdf', color: '#dc2626',
-                    title: '📊 Cara Lihat Rekap Penjualan per Periode',
-                    desc: 'Di menu Laporan tersedia 7 filter periode: (1) Semua — seluruh riwayat yang tersimpan di sistem. (2) Hari Ini — transaksi hari ini saja. (3) 7 Hari — tujuh hari terakhir. (4) Bulan Ini — bulan kalender berjalan. (5) 2 Bulan — 60 hari terakhir. (6) 3 Bulan — 90 hari terakhir. (7) Pilih Tanggal — tentukan rentang dari-sampai secara manual (maks 3 bulan ke belakang). Ringkasan otomatis tampil di atas tabel: Total Omzet, Jumlah Transaksi, Rata-rata per Transaksi, dan Total Dibatalkan. Klik tombol PDF atau CSV untuk mengunduh laporan sesuai filter yang sedang aktif.'
-                },
-                {
-                    icon: 'ph-warning-octagon', color: '#dc2626',
-                    title: '🚫 Hal yang Sebaiknya Tidak Dilakukan',
-                    desc: 'Hindari hal berikut agar sistem berjalan normal: (1) Jangan gunakan lebih dari satu tab browser dengan Z-TRONIK secara bersamaan — bisa menyebabkan konflik sesi login. (2) Jangan tutup tab browser saat sedang proses simpan data — tunggu notifikasi "berhasil" muncul sebelum menutup. (3) Jangan input karakter khusus seperti tanda kutip atau simbol aneh di nama produk atau nama toko — bisa menyebabkan tampilan tidak normal. (4) Jangan hapus akun admin satu-satunya sebelum membuat admin cadangan. (5) Jangan berbagi akun login dengan banyak orang — buat akun karyawan terpisah untuk setiap kasir. (6) Jangan lupa tutup shift sebelum kasir pulang — jika lupa, admin bisa ambil alih shift via menu Clerek.'
-                },
-                {
-                    icon: 'ph-clock', color: '#7c3aed',
-                    title: '⏱️ Animasi Loading — Kapan Muncul',
-                    desc: 'Z-TRONIK menampilkan animasi loading fullscreen (spinner + nama toko) di beberapa kondisi: (1) Login — muncul 2 detik setelah klik Masuk sebelum masuk ke sistem. (2) Logout — muncul 2 detik setelah konfirmasi keluar. (3) Buka Shift — muncul 2 detik setelah konfirmasi mulai shift. (4) Tutup Shift — muncul 2 detik setelah konfirmasi akhiri shift. Tujuannya memberikan feedback visual bahwa sistem sedang memproses. Refresh data (klik Refresh di header) tidak menampilkan overlay — hanya ikon refresh berputar di header. Jika loading terlalu lama saat Refresh, klik lagi tombol Refresh atau periksa koneksi internet.'
-                },
-                {
-                    icon: 'ph-device-tablet', color: '#16a34a',
-                    title: '📲 Optimasi Z-TRONIK di Tablet',
-                    desc: 'Untuk pengalaman terbaik di tablet: (1) Gunakan mode landscape (horizontal) — tampilan POS lebih lebar dan lengkap. (2) Di Safari iPad: Settings → Safari → Request Desktop Website → All Websites (aktifkan) agar selalu tampil versi desktop. (3) Di Chrome Android tablet: menu ⋮ → "Desktop site" untuk tampilan desktop. (4) Ukuran layar ≥ 10 inci sangat direkomendasikan untuk tampilan POS kasir yang nyaman. (5) Tambahkan ke Home Screen untuk akses cepat seperti aplikasi native. (6) Koneksi WiFi lebih disarankan daripada data seluler untuk performa lebih stabil.'
+                    role: 'admin', icon: 'ph-scales', color: '#4f46e5',
+                    title: '⚖️ Neraca Modal (Admin Only)',
+                    desc: 'Neraca Modal menampilkan gambaran keuangan toko secara menyeluruh. Buka dari: menu Laporan → tab Neraca Modal. Isi Neraca Modal: (1) Total Modal Stok — nilai modal semua produk dikalikan stok yang ada. (2) Nilai Jual Stok — potensi pendapatan jika semua stok terjual. (3) Hutang Supplier — total hutang toko ke supplier yang belum lunas (mengurangi kekayaan). (4) Piutang Pelanggan — total hutang pelanggan ke toko yang belum lunas (menambah kekayaan). (5) Kekayaan Bersih = Modal Stok + Piutang Pelanggan − Hutang Supplier. Breakdown per kategori produk juga ditampilkan. Data dihitung real-time.'
                 },
 
                 // ═══════════════════════════════════════════════
                 //  HUTANG PIUTANG
                 // ═══════════════════════════════════════════════
                 {
-                    icon: 'ph-handshake', color: '#dc2626',
+                    role: 'all', icon: 'ph-handshake', color: '#0891b2',
                     title: '🤝 Menu Hutang Piutang — Pengenalan',
-                    desc: 'Menu Hutang Piutang adalah fitur pencatatan dan pemantauan hutang secara terpusat. Ada dua jenis hutang yang dikelola: (1) Hutang Pelanggan (Piutang) — pelanggan berhutang ke toko, misalnya mengambil barang belum bayar. (2) Hutang Supplier — toko berhutang ke supplier/vendor, misalnya stok barang yang belum dilunasi. Akses: Admin bisa lihat, tambah, bayar/cicil, dan hapus. Karyawan hanya bisa lihat dan melihat detail — tidak bisa tambah, bayar, atau hapus. Menu ini muncul di sidebar untuk Admin dan Karyawan (dengan batasan). Data hutang tersimpan di server dan selalu sinkron saat Refresh.'
+                    desc: 'Menu Hutang Piutang mencatat dan memantau hutang secara terpusat. Dua jenis: (1) Hutang Pelanggan (Piutang) — pelanggan berhutang ke toko. (2) Hutang Supplier — toko berhutang ke supplier. Admin bisa lihat, tambah, bayar/cicil, dan hapus. Karyawan hanya bisa melihat dan melihat detail. Jika pelanggan (member) punya hutang aktif, poin tidak akan bertambah dari transaksi hingga hutang lunas.'
                 },
                 {
-                    icon: 'ph-plus-circle', color: '#dc2626',
-                    title: '➕ Cara Tambah Hutang Baru',
-                    desc: 'Cara menambah hutang baru (khusus Admin): (1) Buka menu Hutang Piutang. (2) Pilih tab yang sesuai: "Hutang Pelanggan" atau "Hutang Supplier". (3) Klik tombol hijau "+ Tambah" di pojok kanan atas panel. (4) Isi form: — Hutang Pelanggan: pilih nama pelanggan dari dropdown (daftar diambil dari data member terdaftar), isi jumlah hutang, tanggal, jatuh tempo (opsional), dan keterangan wajib. — Hutang Supplier: ketik nama supplier, isi jumlah, tanggal, jatuh tempo, dan keterangan. (5) Klik "Simpan". Hutang langsung muncul di daftar dengan status "Belum". Untuk hutang supplier, otomatis dicatat sebagai mutasi kas keluar di menu Clerek (alur kas toko berkurang). Data tersimpan ke server secara otomatis.'
+                    role: 'admin', icon: 'ph-plus-circle', color: '#16a34a',
+                    title: '➕ Cara Tambah & Bayar Hutang',
+                    desc: 'Tambah hutang baru (admin): (1) Buka menu Hutang Piutang → pilih tab yang sesuai. (2) Klik "+ Tambah". (3) Isi form: nama/pilih pelanggan atau supplier, jumlah, tanggal, jatuh tempo (opsional), keterangan. (4) Simpan. Bayar/cicil hutang: (1) Klik tombol kuning (ikon uang) pada hutang yang ingin dibayar. (2) Isi jumlah bayar (default = sisa hutang untuk lunas penuh, ubah untuk cicilan). (3) Klik Konfirmasi Bayar. Status otomatis berubah ke "Cicilan" atau "Lunas". Semua pembayaran tercatat di riwayat.'
                 },
                 {
-                    icon: 'ph-currency-circle-dollar', color: '#d97706',
-                    title: '💵 Cara Bayar / Cicil Hutang',
-                    desc: 'Cara mencatat pembayaran atau cicilan hutang (khusus Admin): (1) Di daftar hutang, temukan hutang yang ingin dibayar — statusnya "Belum" atau "Cicilan". (2) Klik tombol kuning (ikon uang) di kolom Aksi. (3) Modal pembayaran terbuka — tampil ringkasan: total hutang, sudah dibayar, dan sisa hutang. (4) Isi "Jumlah Bayar" — default sudah terisi sisa hutang (lunas penuh). Ubah angkanya untuk pembayaran sebagian (cicilan). (5) Isi keterangan opsional, misal: "Cicilan 1", "Transfer BCA", dll. (6) Klik "Konfirmasi Bayar". Sistem otomatis: mengupdate sisa hutang, menambah ke riwayat pembayaran, mengubah status ke "Cicilan" atau "Lunas", serta mencatat mutasi kas (masuk untuk piutang pelanggan, keluar untuk hutang supplier).'
+                    role: 'all', icon: 'ph-funnel', color: '#7c3aed',
+                    title: '📋 Status, Filter & Detail Hutang',
+                    desc: 'Status hutang: (1) Belum — belum ada pembayaran. (2) Cicilan — sudah dibayar sebagian. (3) Lunas — sudah dibayar penuh. (4) Jatuh Tempo — melewati tanggal jatuh tempo dan belum lunas (baris merah). Filter tersedia: Semua, Belum Lunas, Cicilan, Lunas, atau Jatuh Tempo. Klik ikon mata (biru) untuk melihat detail lengkap beserta riwayat pembayaran cicilan. Kolom "Progres" menampilkan progress bar persentase lunas.'
                 },
                 {
-                    icon: 'ph-list-checks', color: '#2563eb',
-                    title: '📋 Status & Filter Hutang',
-                    desc: 'Setiap hutang memiliki status yang berubah otomatis: (1) Belum — belum ada pembayaran sama sekali, sisa hutang = total hutang. (2) Cicilan — sudah dibayar sebagian, sisa > 0. (3) Lunas — sudah dibayar penuh (sisa = 0). (4) Jatuh Tempo — hutang yang belum/cicilan dan tanggal jatuh temponya sudah lewat hari ini (tampil badge merah + baris tabel berwarna merah muda). Filter tersedia di atas tabel: klik "Semua", "Belum Lunas", "Cicilan", "Lunas", atau "Jatuh Tempo". Filter jatuh tempo menampilkan jumlah hutang yang sudah lewat tanggal. Kolom "Progres" menampilkan progress bar berapa persen hutang sudah dilunasi. Sorting otomatis: hutang aktif (belum + cicilan) tampil di atas, lunas di bawah.'
+                    role: 'all', icon: 'ph-arrows-left-right', color: '#059669',
+                    title: '💰 Hutang & Catatan di Struk',
+                    desc: 'Jika pelanggan (member) yang sedang checkout masih punya hutang aktif, struk transaksi otomatis menampilkan catatan hutang di bagian bawah — berisi daftar hingga 3 hutang teratas dan total sisa hutang. Catatan ini mengingatkan pelanggan tanpa kasir perlu menyebutkan manual. Catatan hanya muncul jika ada hutang aktif. Selain itu, semua transaksi hutang piutang otomatis tercatat di saldo kas toko (menu Clerek → tab Kas).'
+                },
+
+                // ═══════════════════════════════════════════════
+                //  SHIFT & KAS
+                // ═══════════════════════════════════════════════
+                {
+                    role: 'all', icon: 'ph-user-check', color: '#0891b2',
+                    title: '🕐 Clerek — Manajemen Shift & Kas',
+                    desc: 'Menu Clerek digunakan untuk manajemen shift kasir dan mutasi kas. Cara buka shift: isi Kas Awal → klik "Mulai Shift". Shift aktif memungkinkan proses transaksi di menu Penjualan. Cara tutup shift: klik "Akhiri Shift" → isi Kas Akhir → laporan shift otomatis tampil. Tab "Kas": catat pemasukan dan pengeluaran kas di luar transaksi jual beli. Tab "Riwayat Shift": histori shift yang sudah selesai. Admin bisa ambil alih shift karyawan jika karyawan lupa tutup shift sebelum pulang.'
+                },
+
+                // ═══════════════════════════════════════════════
+                //  PENGATURAN & ADMIN
+                // ═══════════════════════════════════════════════
+                {
+                    role: 'admin', icon: 'ph-gear', color: '#374151',
+                    title: '⚙️ Pengaturan Sistem (Admin Only)',
+                    desc: 'Pengaturan tersedia khusus untuk admin: (1) Pengaturan Toko — nama toko (muncul di struk dan halaman login), alamat, no HP, pesan footer struk. (2) Foto QRIS — upload gambar QRIS untuk ditampilkan saat pembayaran QRIS. (3) Kredensial Admin — ubah username dan password login admin. (4) Password Pembatalan — password khusus untuk memverifikasi pembatalan transaksi, berlaku untuk semua user. (5) Pembersihan Data — hapus transaksi lama secara manual untuk menjaga performa. Semua perubahan langsung tersimpan saat tombol Simpan diklik.'
                 },
                 {
-                    icon: 'ph-bell-ringing', color: '#dc2626',
-                    title: '⚠️ Notifikasi Jatuh Tempo Hutang',
-                    desc: 'Z-TRONIK mendeteksi hutang yang sudah melewati jatuh tempo secara otomatis setiap kali menu Hutang Piutang dibuka. Indikator jatuh tempo: (1) Filter "Jatuh Tempo" di atas tabel menampilkan angka merah, contoh: "Jatuh Tempo (3)" artinya ada 3 hutang yang sudah lewat. (2) Baris tabel berwarna merah muda untuk hutang jatuh tempo. (3) Badge status berubah menjadi "⚠ Jatuh Tempo" berwarna merah. Hutang dianggap jatuh tempo jika: tanggal jatuh tempo telah diisi saat tambah hutang, dan tanggal tersebut sudah sama dengan atau lebih kecil dari hari ini, serta status belum lunas. Untuk menghilangkan notifikasi jatuh tempo: bayar/lunasi hutang tersebut. Tips: selalu isi kolom jatuh tempo agar bisa dipantau.'
+                    role: 'admin', icon: 'ph-users-three', color: '#7c3aed',
+                    title: '👤 Manajemen Karyawan (Admin Only)',
+                    desc: 'Kelola akun login karyawan — hanya bisa diakses admin. Tambah karyawan: klik "+ Tambah Karyawan" → isi Nama, Username, Password, No. HP, Email, Alamat → Simpan. Hak akses karyawan: Dashboard, Penjualan, Pelanggan, Poin & Reward, Laporan, Clerek, dan FAQ. Menu yang tidak bisa diakses karyawan: Produk Saya, Stock Opname, Pengaturan, dan Karyawan. Edit karyawan: klik ikon pensil. Hapus: klik ikon tempat sampah. Karyawan yang dihapus tidak bisa login lagi.'
                 },
                 {
-                    icon: 'ph-star-half', color: '#7c3aed',
-                    title: '🌟 Hubungan Hutang dengan Poin Member',
-                    desc: 'Poin member terhubung dengan status hutang pelanggan. Aturannya: selama pelanggan masih memiliki hutang aktif (status "Belum" atau "Cicilan"), poin reward TIDAK akan bertambah setelah transaksi di kasir. Cara kerja saat checkout: (1) Kasir memilih member di POS. (2) Sistem memeriksa apakah member tersebut punya hutang aktif di menu Hutang Piutang. (3) Jika ada hutang aktif → poin tidak ditambahkan meski transaksi selesai. Poin yang sudah diredeem (ditukar) tetap dikurangi seperti biasa. (4) Jika tidak ada hutang aktif → poin ditambah normal sesuai aturan Poin & Reward. Poin kembali aktif otomatis di transaksi berikutnya setelah semua hutang pelanggan lunas. Tujuan: mendorong pelanggan melunasi hutang sebelum mendapat manfaat poin.'
+                    role: 'admin', icon: 'ph-lock-key', color: '#dc2626',
+                    title: '🔒 Keamanan & Hak Akses',
+                    desc: 'Z-TRONIK memiliki 2 level akses: (1) Admin — akses penuh semua menu, bisa ambil alih shift karyawan. (2) Karyawan — akses terbatas ke menu operasional sehari-hari. Password Pembatalan Transaksi adalah password terpisah khusus untuk membatalkan transaksi — diatur di menu Pengaturan. Tips keamanan: (A) Segera ganti password admin default setelah pertama pakai. (B) Buat akun karyawan terpisah untuk setiap kasir — jangan berbagi satu akun. (C) Hapus akun karyawan yang sudah tidak bekerja. (D) Password pembatalan sebaiknya berbeda dengan password login.'
+                },
+
+                // ═══════════════════════════════════════════════
+                //  TIPS & TROUBLESHOOTING
+                // ═══════════════════════════════════════════════
+                {
+                    role: 'all', icon: 'ph-lightbulb', color: '#d97706',
+                    title: '❓ Tips & Pintasan Berguna',
+                    desc: 'Tips penggunaan sehari-hari: (1) Tekan Enter setelah ketik username untuk pindah ke field password, Enter lagi untuk login. (2) Di POS, ketik nama atau barcode di kolom pencarian untuk filter produk instan. (3) Laporan bisa diunduh sebagai PDF atau CSV dari menu Laporan. (4) Gunakan mode landscape di tablet untuk tampilan POS yang lebih luas. (5) Tambahkan ke home screen HP: di Chrome mobile → menu ⋮ → "Add to Home Screen" — Z-TRONIK terbuka seperti aplikasi native. (6) Klik Refresh di header untuk memperbarui data terbaru.'
                 },
                 {
-                    icon: 'ph-receipt', color: '#374151',
-                    title: '🧾 Catatan Hutang di Struk Transaksi',
-                    desc: 'Jika pelanggan (member) yang sedang checkout masih memiliki hutang aktif, struk transaksi akan otomatis menampilkan "CATATAN HUTANG" di bagian bawah struk — tepat di atas pesan footer. Isi catatan hutang di struk: (1) Judul "⚠ CATATAN HUTANG" dalam kotak merah. (2) Daftar hingga 3 hutang teratas beserta sisa masing-masing. Jika lebih dari 3, ditampilkan "+X lainnya". (3) Total sisa hutang keseluruhan. Catatan ini muncul baik di: cetak browser (print dialog) maupun cetak Bluetooth thermal printer (ESC/POS). Tujuan: mengingatkan pelanggan bahwa masih ada hutang yang perlu dilunasi, tanpa perlu kasir menyebutkan manual. Catatan hanya muncul jika ada hutang aktif — tidak muncul jika semua hutang sudah lunas.'
+                    role: 'all', icon: 'ph-device-tablet', color: '#0891b2',
+                    title: '📲 Tips di Tablet (iPad / Android Tab)',
+                    desc: 'Untuk pengalaman terbaik di tablet: (1) Gunakan mode landscape (horizontal) — tampilan lebih lebar. (2) Di Safari iPad: Settings → Safari → Request Desktop Website → All Websites (aktifkan) agar tampil versi desktop. (3) Di Chrome Android tablet: menu ⋮ → "Desktop site". (4) Layar 10 inci ke atas direkomendasikan untuk tampilan POS yang nyaman. (5) Tambahkan ke Home Screen untuk akses cepat. (6) Koneksi WiFi lebih stabil dibanding data seluler.'
                 },
                 {
-                    icon: 'ph-arrows-left-right', color: '#059669',
-                    title: '💰 Integrasi Hutang dengan Kas (Mutasi Kas)',
-                    desc: 'Semua transaksi hutang piutang otomatis tercatat di mutasi kas toko (menu Clerek → tab Kas): (1) Tambah hutang supplier baru → kas keluar (toko mengeluarkan uang/barang untuk supplier). (2) Pelanggan bayar hutang (piutang) → kas masuk (toko menerima uang dari pelanggan). (3) Bayar hutang ke supplier → kas keluar (toko membayar ke supplier). Keterangan mutasi otomatis diisi dengan detail hutang, contoh: "Pembayaran Piutang: Budi Santoso — Cicilan 1" atau "Bayar Hutang Supplier: Toko Grosir — Pelunasan". Ini memastikan alur kas toko selalu akurat dan mencerminkan semua transaksi nyata. Semua mutasi kas tersinkron otomatis ke server.'
+                    role: 'all', icon: 'ph-wrench', color: '#dc2626',
+                    title: '🔧 Troubleshooting — Masalah Umum',
+                    desc: 'Solusi masalah yang sering terjadi: (1) Tidak bisa cetak struk — pastikan browser tidak memblokir print. Di Chrome: Settings → Privacy → Site Settings → izinkan pop-up. (2) Kamera tidak bisa scan barcode — izinkan akses kamera di browser (klik ikon kunci di address bar). (3) Struk tidak rapi — di dialog print, set paper size ke 58mm. (4) Login tidak bisa — pastikan username dan password benar, perhatikan huruf kapital. (5) Data tidak muncul setelah Refresh — tunggu lalu klik Refresh lagi, atau tutup dan buka ulang browser. (6) Produk tidak muncul di POS — pastikan stok > 0 atau aktifkan Unlimited.'
                 },
                 {
-                    icon: 'ph-eye', color: '#0891b2',
-                    title: '🔍 Lihat Detail & Riwayat Pembayaran',
-                    desc: 'Setiap hutang memiliki halaman detail lengkap. Cara membuka: klik tombol biru (ikon mata) di kolom Aksi pada baris hutang. Detail yang ditampilkan: nama, tipe hutang, keterangan, tanggal hutang dibuat, jatuh tempo (jika diisi), kasir yang menambahkan, total hutang, jumlah sudah dibayar, progress bar persentase lunas, dan sisa hutang. Di bagian bawah detail terdapat riwayat pembayaran lengkap: tanggal bayar, keterangan, dan jumlah setiap cicilan. Admin juga bisa langsung klik tombol "Bayar" dari halaman detail untuk membuka modal pembayaran. Karyawan hanya bisa melihat detail tanpa aksi.'
-                },
-                {
-                    icon: 'ph-trash', color: '#dc2626',
-                    title: '🗑️ Hapus Data Hutang',
-                    desc: 'Cara menghapus data hutang (khusus Admin): klik tombol merah (ikon tempat sampah) di kolom Aksi → muncul popup konfirmasi "Hapus data hutang... Tindakan ini tidak bisa dibatalkan" → klik "Ya, Lanjutkan". Data hutang dihapus dari sistem. Perhatian: (1) Hapus hutang tidak otomatis membalik mutasi kas yang sudah tercatat. (2) Hutang yang sudah lunas sebaiknya tidak dihapus agar riwayat tetap tersimpan — cukup biarkan berstatus "Lunas". (3) Jika tidak sengaja menambah hutang yang salah, hapus sebelum ada pembayaran agar tidak ada mutasi kas yang kacau. (4) Karyawan tidak bisa menghapus hutang — hanya admin.'
+                    role: 'all', icon: 'ph-prohibit', color: '#dc2626',
+                    title: '🚫 Hal yang Sebaiknya Tidak Dilakukan',
+                    desc: 'Hindari hal berikut agar sistem berjalan normal: (1) Jangan gunakan lebih dari satu tab browser untuk Z-TRONIK secara bersamaan. (2) Jangan tutup tab browser saat sedang menyimpan data — tunggu notifikasi "berhasil" sebelum menutup. (3) Jangan input karakter khusus seperti tanda kutip di nama produk atau nama toko. (4) Jangan hapus akun admin satu-satunya sebelum membuat admin cadangan. (5) Jangan berbagi akun login — buat akun karyawan terpisah untuk setiap kasir. (6) Jangan lupa tutup shift sebelum kasir pulang — jika lupa, admin bisa ambil alih shift via menu Clerek.'
                 },
             ];
+
+            // Filter berdasarkan role user yang login
+            var faqs = isAdmin
+                ? allFaqs
+                : allFaqs.filter(function(f){ return f.role !== 'admin'; });
 
             var totalPages = Math.ceil(faqs.length / _faqPerPage);
             if (_faqPage >= totalPages) _faqPage = totalPages - 1;
@@ -7393,6 +7956,9 @@
 
             var accordionItems = pageItems.map(function(f, i) {
                 var globalIdx = start + i;
+                var adminBadge = (isAdmin && f.role === 'admin')
+                    ? '<span style="font-size:9px;font-weight:700;background:#ede9fe;color:#6d28d9;border-radius:4px;padding:2px 6px;margin-left:6px;flex-shrink:0;">ADMIN</span>'
+                    : '';
                 return '<div style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;" id="faq-item-' + globalIdx + '">'
                     + '<button onclick="toggleFaq(' + globalIdx + ')" '
                     + 'style="width:100%;display:flex;align-items:center;gap:12px;padding:13px 16px;background:#fff;border:none;cursor:pointer;text-align:left;"'
@@ -7401,6 +7967,7 @@
                     + '<i class="ph ' + f.icon + '" style="color:' + f.color + ';font-size:18px;"></i>'
                     + '</div>'
                     + '<span style="flex:1;font-size:13px;font-weight:600;color:#1f2937;">' + f.title + '</span>'
+                    + adminBadge
                     + '<i id="faq-arrow-' + globalIdx + '" class="ph ph-caret-down" style="color:#9ca3af;font-size:16px;transition:transform 0.2s;flex-shrink:0;"></i>'
                     + '</button>'
                     + '<div id="faq-body-' + globalIdx + '" style="display:none;padding:0 16px 14px 64px;background:#fafafa;border-top:1px solid #f0f0f0;">'
@@ -7423,19 +7990,24 @@
                 + '</button>'
                 + '</div>';
 
+            var adminCount = allFaqs.filter(function(f){ return f.role === 'admin'; }).length;
+            var subtitle = isAdmin
+                ? 'Admin: ' + allFaqs.length + ' topik tersedia (' + adminCount + ' khusus admin) &bull; Klik untuk membuka'
+                : faqs.length + ' topik tersedia &bull; Klik untuk membuka';
+
             return '<div style="max-width:680px;">'
                 + '<div style="background:linear-gradient(135deg,#14532d,#16a34a);border-radius:16px;padding:20px 24px;margin-bottom:20px;color:#fff;">'
                 + '<div style="display:flex;align-items:center;gap:12px;">'
                 + '<i class="ph ph-question" style="font-size:32px;opacity:0.9;"></i>'
                 + '<div><div style="font-size:18px;font-weight:900;letter-spacing:0.3px;">FAQ & Panduan Penggunaan</div>'
-                + '<div style="font-size:12px;opacity:0.8;margin-top:2px;">Klik salah satu menu di bawah untuk melihat penjelasannya</div>'
+                + '<div style="font-size:12px;opacity:0.8;margin-top:2px;">' + subtitle + '</div>'
                 + '</div></div>'
                 + '</div>'
                 + '<div style="display:flex;flex-direction:column;gap:6px;">'
                 + accordionItems
                 + '</div>'
                 + navHtml
-                + '<p style="text-align:center;font-size:11px;color:#9ca3af;margin-top:16px;">Z-TRONIK POS &bull; Sistem Kasir Digital &bull; Versi 6.2</p>'
+                + '<p style="text-align:center;font-size:11px;color:#9ca3af;margin-top:16px;">Z-TRONIK POS &bull; Sistem Kasir Digital</p>'
                 + '</div>';
         }
 
