@@ -512,6 +512,7 @@
             // State paginasi Poin & Reward
             rewardListPage: 1,
             rewardSearch:   '',
+            rewardSort:     'default',
             produkRulePage: 1,
             custPoinPage:   1,
             custPoinSearch: '',
@@ -521,6 +522,7 @@
             hutangTab: 'pelanggan',
             hutangSearch: '',
             hutangFilterStatus: 'semua',
+            hutangSort: 'default',
             // State laporan
             laporanTab: 'transaksi',  // 'transaksi' | 'neraca'
             laporanPage: 1,
@@ -936,6 +938,7 @@
             state.laporanSearch = '';
             state.custPoinPage = 1;
             state.rewardSearch = '';
+            state.rewardSort   = 'default';
             state.custPoinSearch = '';
 
             renderSidebarMenu();
@@ -2161,6 +2164,8 @@
                 box.innerHTML = buildTunaiHTML(grandTotal, earnedPoin);
             } else if (state.paymentMethod === 'QRIS') {
                 box.innerHTML = buildQrisHTML(grandTotal, earnedPoin);
+            } else if (state.paymentMethod === 'E-Wallet') {
+                box.innerHTML = buildEWalletHTML(grandTotal, earnedPoin);
             } else if (state.paymentMethod === 'Hutang') {
                 box.innerHTML = buildHutangHTML(grandTotal);
             } else {
@@ -2266,6 +2271,32 @@
                         <button onclick="closePaymentModal()" class="flex-1 py-3 border border-gray-200 text-gray-600 font-semibold rounded-xl hover:bg-gray-50 transition-colors">Batal</button>
                         <button onclick="processPayment(${grandTotal})" class="flex-1 py-3 bg-purple-600 text-white font-bold rounded-xl hover:bg-purple-700 transition-colors flex items-center justify-center gap-2">
                             <i class="ph ph-check-circle text-lg"></i> Konfirmasi Berhasil
+                        </button>
+                    </div>
+                </div>`;
+        }
+
+        function buildEWalletHTML(grandTotal, earnedPoin) {
+            return `
+                <div class="p-6">
+                    <div class="flex items-center justify-between mb-5">
+                        <h3 class="text-lg font-bold text-gray-800 flex items-center gap-2"><i class="ph ph-device-mobile-camera text-orange-500 text-xl"></i> Pembayaran E-Wallet</h3>
+                        <button onclick="closePaymentModal()" class="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg"><i class="ph ph-x text-lg"></i></button>
+                    </div>
+                    <div class="bg-orange-50 border border-orange-100 rounded-xl p-5 text-center mb-4">
+                        <p class="text-sm text-orange-600 font-medium mb-1">Total yang harus dibayar</p>
+                        <p class="text-3xl font-bold text-orange-600 mb-2">${formatRp(grandTotal)}</p>
+                        <div class="flex flex-wrap justify-center gap-2 mt-3">
+                            ${['GoPay','OVO','Dana','ShopeePay','LinkAja'].map(w=>`
+                            <span class="px-3 py-1 bg-white border border-orange-200 rounded-full text-xs font-semibold text-orange-500">${w}</span>`).join('')}
+                        </div>
+                        ${earnedPoin > 0 ? `<p class="text-xs text-orange-500 mt-3">+${earnedPoin} poin untuk ${state.posActiveMember?.name}</p>` : ''}
+                    </div>
+                    <p class="text-xs text-gray-400 text-center mb-5">Pastikan pembayaran E-Wallet sudah diterima sebelum konfirmasi.</p>
+                    <div class="flex gap-3">
+                        <button onclick="closePaymentModal()" class="flex-1 py-3 border border-gray-200 text-gray-600 font-semibold rounded-xl hover:bg-gray-50 transition-colors">Batal</button>
+                        <button onclick="processPayment(${grandTotal})" class="flex-1 py-3 bg-orange-500 text-white font-bold rounded-xl hover:bg-orange-600 transition-colors flex items-center justify-center gap-2">
+                            <i class="ph ph-check-circle text-lg"></i> Konfirmasi Diterima
                         </button>
                     </div>
                 </div>`;
@@ -2840,10 +2871,11 @@
             </div>`;
 
             const methods = [
-                {id:'Tunai', icon:'ph-money',       color:'#16a34a'},
-                {id:'Kartu', icon:'ph-credit-card', color:'#2563eb'},
-                {id:'QRIS',  icon:'ph-qr-code',     color:'#7c3aed'},
-                {id:'Hutang', icon:'ph-hand-coins', color:'#dc2626'}
+                {id:'Tunai',    icon:'ph-money',        color:'#16a34a'},
+                {id:'Kartu',    icon:'ph-credit-card',  color:'#2563eb'},
+                {id:'QRIS',     icon:'ph-qr-code',      color:'#7c3aed'},
+                {id:'E-Wallet', icon:'ph-device-mobile-camera', color:'#ea580c'},
+                {id:'Hutang',   icon:'ph-hand-coins',   color:'#dc2626'}
             ];
 
             const methodHtml = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;flex-shrink:0;">
@@ -4149,126 +4181,123 @@
         }
 
         // Hitung poin yang didapat dari satu transaksi
+        // ATURAN: Produk yang sudah punya Poin_Per_Unit → pakai poin produk saja,
+        //         harganya TIDAK ikut dihitung kelipatan (cegah double point).
         function calculateEarnedPoin(grandTotal, cart) {
             let poin = 0;
-            // Sistem kelipatan: setiap kelipatan belanjaPoinMin dapat belanjaPoinDapat poin
-            if (rewardData.belanjaPoinMin > 0 && rewardData.belanjaPoinDapat > 0) {
-                poin += Math.floor(grandTotal / rewardData.belanjaPoinMin) * rewardData.belanjaPoinDapat;
-            }
-            // Poin dari sistem lama (Rp X = 1 poin) — jika masih dipakai
-            if (rewardData.pointsPerRupiah > 0) {
-                poin += Math.floor(grandTotal / rewardData.pointsPerRupiah);
-            }
-            // Bonus poin jika belanja >= minimal tertentu (aturan tambahan)
-            rewardData.belanjaPoinRules.forEach(rule => {
-                if (grandTotal >= rule.minBelanja) poin += rule.poinBonus;
-            });
-            // Poin per unit dari field produk
+            let totalProdukPoinPerUnit = 0;
             if (cart && cart.length > 0) {
                 cart.forEach(item => {
                     const prod = state.products.find(p => p.id === item.id);
                     const ppu = (prod && prod.poinPerUnit) ? prod.poinPerUnit : 0;
-                    if (ppu > 0) poin += ppu * item.qty;
+                    if (ppu > 0) {
+                        poin += ppu * item.qty;
+                        totalProdukPoinPerUnit += (item.price || 0) * item.qty;
+                    }
                 });
             }
+            const totalKelipatan = Math.max(0, grandTotal - totalProdukPoinPerUnit);
+            if (rewardData.belanjaPoinMin > 0 && rewardData.belanjaPoinDapat > 0 && totalKelipatan > 0) {
+                poin += Math.floor(totalKelipatan / rewardData.belanjaPoinMin) * rewardData.belanjaPoinDapat;
+            }
+            if (rewardData.pointsPerRupiah > 0 && totalKelipatan > 0) {
+                poin += Math.floor(totalKelipatan / rewardData.pointsPerRupiah);
+            }
+            rewardData.belanjaPoinRules.forEach(rule => {
+                if (grandTotal >= rule.minBelanja) poin += rule.poinBonus;
+            });
             return poin;
         }
 
         // Redeem poin ke diskon harga (dari tabel pelanggan di menu Poin & Reward)
-        // ── DROPDOWN TUKAR POIN ────────────────────────────────────
-        // Satu tombol "Tukar Poin ▾" per baris — klik buka popup compact
-        function openTukarPoinDropdown(custId, btn) {
-            // Tutup dropdown lain yang mungkin masih terbuka
-            var existing = document.getElementById('tukar-poin-dropdown');
-            if (existing) {
-                if (existing.dataset.custId === custId) { existing.remove(); return; }
-                existing.remove();
-            }
-            document.removeEventListener('click', closeTukarPoinOnOutside, true);
-
+        // ── BOTTOM SHEET / MODAL TUKAR POIN ──────────────────────────
+        function openTukarPoinDropdown(custId) {
+            closeTukarPoinDropdown();
             var cust = rewardData.customers.find(function(c){ return c.id === custId; });
             if (!cust) return;
-
-            // Opsi 1: Tukar ke diskon tunai
+            var isMobile = window.innerWidth < 768;
             var canDiskon = (cust.poin||0) >= 100;
             var items = '<button type="button" onclick="closeTukarPoinDropdown(); redeemPoints(\'' + custId + '\')" '
                 + (canDiskon ? '' : 'disabled ')
-                + 'style="width:100%;display:flex;align-items:center;gap:8px;padding:8px 12px;border:none;'
+                + 'style="width:100%;display:flex;align-items:center;gap:10px;padding:13px 14px;border:1.5px solid '
+                + (canDiskon ? '#bbf7d0' : '#f3f4f6') + ';margin-bottom:8px;'
                 + 'background:' + (canDiskon ? '#f0fdf4' : '#f9fafb') + ';'
                 + 'color:' + (canDiskon ? '#15803d' : '#9ca3af') + ';'
-                + 'font-size:12px;font-weight:600;border-radius:8px;'
-                + 'cursor:' + (canDiskon ? 'pointer' : 'not-allowed') + ';text-align:left;margin-bottom:4px;"'
-                + (canDiskon ? ' onmouseover="this.style.background=\'#dcfce7\'" onmouseout="this.style.background=\'#f0fdf4\'"' : '')
-                + '><i class="ph ph-currency-circle-dollar" style="font-size:14px;flex-shrink:0;"></i>'
-                + '<span style="flex:1;">Tukar ke Diskon Tunai</span>'
-                + '<span style="font-size:10px;color:' + (canDiskon ? '#16a34a' : '#d1d5db') + ';">min. 100 poin</span>'
+                + 'font-size:13px;font-weight:600;border-radius:10px;'
+                + 'cursor:' + (canDiskon ? 'pointer' : 'not-allowed') + ';text-align:left;">'
+                + '<span style="width:32px;height:32px;border-radius:50%;background:' + (canDiskon ? '#dcfce7' : '#f3f4f6') + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;">'
+                + '<i class="ph ph-currency-circle-dollar" style="font-size:16px;color:' + (canDiskon ? '#16a34a' : '#d1d5db') + ';"></i></span>'
+                + '<span style="flex:1;"><span style="display:block;">Tukar ke Diskon Tunai</span>'
+                + '<span style="font-size:11px;font-weight:400;color:' + (canDiskon ? '#4ade80' : '#d1d5db') + ';">min. 100 poin</span></span>'
+                + (canDiskon ? '<i class="ph ph-arrow-right" style="font-size:14px;opacity:0.5;"></i>' : '')
                 + '</button>';
-
-            // Opsi 2: Daftar reward
             if (rewardData.rewardList.length > 0) {
-                items += '<div style="font-size:10px;color:#9ca3af;font-weight:700;padding:6px 4px 3px;'
-                    + 'border-top:1px solid #f3f4f6;margin-top:2px;letter-spacing:0.5px;text-transform:uppercase;">Reward</div>';
+                items += '<div style="font-size:10px;color:#9ca3af;font-weight:700;padding:6px 2px 6px;letter-spacing:0.6px;text-transform:uppercase;border-top:1px solid #f3f4f6;margin-bottom:4px;">Tukar Reward</div>';
                 rewardData.rewardList.forEach(function(r) {
                     var can = (cust.poin||0) >= r.poinDibutuhkan;
                     items += '<button type="button" onclick="closeTukarPoinDropdown(); redeemRewardItem(\'' + custId + '\',\'' + r.id + '\')" '
                         + (can ? '' : 'disabled ')
-                        + 'style="width:100%;display:flex;align-items:center;gap:8px;padding:8px 12px;border:none;'
+                        + 'style="width:100%;display:flex;align-items:center;gap:10px;padding:13px 14px;border:1.5px solid '
+                        + (can ? '#e9d5ff' : '#f3f4f6') + ';margin-bottom:8px;'
                         + 'background:' + (can ? '#faf5ff' : '#f9fafb') + ';'
                         + 'color:' + (can ? '#7e22ce' : '#9ca3af') + ';'
-                        + 'font-size:12px;font-weight:600;border-radius:8px;'
-                        + 'cursor:' + (can ? 'pointer' : 'not-allowed') + ';text-align:left;margin-bottom:4px;"'
-                        + (can ? ' onmouseover="this.style.background=\'#f3e8ff\'" onmouseout="this.style.background=\'#faf5ff\'"' : '')
-                        + '><i class="ph ph-gift" style="font-size:14px;flex-shrink:0;"></i>'
-                        + '<span style="flex:1;">' + r.name + '</span>'
-                        + '<span style="font-size:10px;white-space:nowrap;color:' + (can ? '#7c3aed' : '#d1d5db') + ';">'
-                        + r.poinDibutuhkan.toLocaleString('id-ID') + ' poin</span>'
+                        + 'font-size:13px;font-weight:600;border-radius:10px;'
+                        + 'cursor:' + (can ? 'pointer' : 'not-allowed') + ';text-align:left;">'
+                        + '<span style="width:32px;height:32px;border-radius:50%;background:' + (can ? '#f3e8ff' : '#f3f4f6') + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;">'
+                        + '<i class="ph ph-gift" style="font-size:16px;color:' + (can ? '#7c3aed' : '#d1d5db') + ';"></i></span>'
+                        + '<span style="flex:1;"><span style="display:block;">' + r.name + '</span>'
+                        + '<span style="font-size:11px;font-weight:400;color:' + (can ? '#a855f7' : '#d1d5db') + ';">' + r.poinDibutuhkan.toLocaleString('id-ID') + ' poin</span></span>'
+                        + (can ? '<i class="ph ph-arrow-right" style="font-size:14px;opacity:0.5;"></i>' : '')
                         + '</button>';
                 });
             } else {
-                items += '<p style="font-size:11px;color:#9ca3af;text-align:center;padding:8px 0;border-top:1px solid #f3f4f6;margin-top:4px;">Belum ada reward tersedia.</p>';
+                items += '<div style="text-align:center;padding:16px 0 8px;border-top:1px solid #f3f4f6;margin-top:4px;">'
+                    + '<i class="ph ph-gift" style="font-size:28px;color:#e5e7eb;display:block;margin-bottom:6px;"></i>'
+                    + '<p style="font-size:12px;color:#9ca3af;margin:0;">Belum ada reward tersedia.</p></div>';
             }
-
-            // Buat dropdown
-            var dd = document.createElement('div');
-            dd.id = 'tukar-poin-dropdown';
-            dd.dataset.custId = custId;
-            dd.style.cssText = 'position:fixed;z-index:9999;background:#fff;border:1px solid #e5e7eb;'
-                + 'border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.13);padding:8px;min-width:240px;max-width:290px;';
-            dd.innerHTML = '<div style="font-size:11px;font-weight:700;color:#374151;padding:4px 8px 8px;'
-                + 'border-bottom:1px solid #f3f4f6;margin-bottom:6px;">'
-                + '<i class="ph ph-arrows-left-right" style="color:#16a34a;margin-right:4px;"></i>'
-                + 'Tukar Poin — <span style="color:#16a34a;">' + (cust.poin||0).toLocaleString('id-ID') + ' poin</span>'
-                + '</div>' + items;
-            document.body.appendChild(dd);
-
-            // Posisi tepat di bawah tombol
-            var rect = btn.getBoundingClientRect();
-            var ddW = 270;
-            var left = rect.left;
-            if (left + ddW > window.innerWidth - 8) left = window.innerWidth - ddW - 8;
-            if (left < 8) left = 8;
-            dd.style.left = left + 'px';
-            dd.style.top  = (rect.bottom + 6) + 'px';
-
-            // Tutup saat klik di luar
-            setTimeout(function() {
-                document.addEventListener('click', closeTukarPoinOnOutside, true);
-            }, 0);
-        }
-
-        function closeTukarPoinOnOutside(e) {
-            var dd = document.getElementById('tukar-poin-dropdown');
-            if (dd && !dd.contains(e.target)) {
-                dd.remove();
-                document.removeEventListener('click', closeTukarPoinOnOutside, true);
+            var overlay = document.createElement('div');
+            overlay.id = 'tukar-poin-overlay';
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:9998;background:rgba(0,0,0,0.45);transition:opacity 0.2s;opacity:0;';
+            overlay.onclick = closeTukarPoinDropdown;
+            document.body.appendChild(overlay);
+            requestAnimationFrame(function(){ overlay.style.opacity = '1'; });
+            var panel = document.createElement('div');
+            panel.id = 'tukar-poin-dropdown';
+            panel.dataset.custId = custId;
+            if (isMobile) {
+                panel.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#fff;border-radius:20px 20px 0 0;padding:0 16px 32px;max-height:85vh;overflow-y:auto;transform:translateY(100%);transition:transform 0.28s cubic-bezier(.32,.72,0,1);';
+            } else {
+                panel.style.cssText = 'position:fixed;top:50%;left:50%;z-index:9999;transform:translate(-50%,-60%);opacity:0;background:#fff;border-radius:16px;padding:0 20px 20px;width:340px;max-width:calc(100vw - 32px);max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.18);transition:transform 0.22s cubic-bezier(.32,.72,0,1), opacity 0.22s;';
             }
+            panel.innerHTML =
+                (isMobile ? '<div style="width:40px;height:4px;background:#e5e7eb;border-radius:4px;margin:12px auto 16px;"></div>' : '<div style="height:20px;"></div>')
+                + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">'
+                + '<div><p style="font-size:15px;font-weight:700;color:#111827;margin:0;">' + cust.name + '</p>'
+                + '<p style="font-size:12px;color:#6b7280;margin:0;"><i class="ph ph-star" style="color:#f59e0b;"></i> '
+                + '<span style="font-weight:600;color:#16a34a;">' + (cust.poin||0).toLocaleString('id-ID') + ' poin</span> aktif tersedia</p></div>'
+                + '<button onclick="closeTukarPoinDropdown()" style="width:32px;height:32px;border-radius:50%;border:1px solid #e5e7eb;background:#f9fafb;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">'
+                + '<i class="ph ph-x" style="font-size:14px;color:#6b7280;"></i></button></div>'
+                + items;
+            document.body.appendChild(panel);
+            requestAnimationFrame(function(){
+                requestAnimationFrame(function(){
+                    if (isMobile) { panel.style.transform = 'translateY(0)'; }
+                    else { panel.style.transform = 'translate(-50%,-50%)'; panel.style.opacity = '1'; }
+                });
+            });
         }
-
         function closeTukarPoinDropdown() {
-            var dd = document.getElementById('tukar-poin-dropdown');
-            if (dd) dd.remove();
-            document.removeEventListener('click', closeTukarPoinOnOutside, true);
+            var panel   = document.getElementById('tukar-poin-dropdown');
+            var overlay = document.getElementById('tukar-poin-overlay');
+            var isMobile = window.innerWidth < 768;
+            if (overlay) { overlay.style.opacity = '0'; setTimeout(function(){ if(overlay.parentNode) overlay.remove(); }, 220); }
+            if (panel) {
+                if (isMobile) { panel.style.transform = 'translateY(100%)'; }
+                else { panel.style.transform = 'translate(-50%,-60%)'; panel.style.opacity = '0'; }
+                setTimeout(function(){ if(panel.parentNode) panel.remove(); }, 280);
+            }
         }
+        function closeTukarPoinOnOutside() { closeTukarPoinDropdown(); }
 
         function redeemPoints(custId) {
             const cust = rewardData.customers.find(c => c.id === custId);
@@ -4492,11 +4521,20 @@
             var goldCount = rewardData.customers.filter(function(c){ return c.tier==="Gold"; }).length;
 
             var rwdPP = 5;
-            // Filter reward berdasarkan pencarian
             var rewardFiltered = rewardData.rewardList.filter(function(r) {
                 var q = (state.rewardSearch || '').toLowerCase().trim();
                 return !q || r.name.toLowerCase().includes(q) || (r.deskripsi && r.deskripsi.toLowerCase().includes(q));
             });
+            var sortKey = state.rewardSort || 'default';
+            if (sortKey !== 'default') {
+                rewardFiltered = rewardFiltered.slice().sort(function(a, b) {
+                    if (sortKey === 'name_asc')  return a.name.localeCompare(b.name, 'id');
+                    if (sortKey === 'name_desc') return b.name.localeCompare(a.name, 'id');
+                    if (sortKey === 'poin_asc')  return (a.poinDibutuhkan||0) - (b.poinDibutuhkan||0);
+                    if (sortKey === 'poin_desc') return (b.poinDibutuhkan||0) - (a.poinDibutuhkan||0);
+                    return 0;
+                });
+            }
             var rwdTotal = Math.max(1, Math.ceil(rewardFiltered.length / rwdPP));
             if (state.rewardListPage > rwdTotal) state.rewardListPage = rwdTotal;
             var rwdStart = (state.rewardListPage-1)*rwdPP;
@@ -4561,7 +4599,7 @@
                         + "<div class=\"w-full bg-gray-200 rounded-full h-1.5 mt-1\"><div class=\"bg-green-500 h-1.5 rounded-full\" style=\"width:" + pct + "%\"></div></div>" + progText + "</td>"
                         + "<td class=\"py-3 px-4 text-center text-sm text-gray-600\">" + formatRp(c.totalBelanja||0) + "</td>"
                         + "<td class=\"py-3 px-4 text-center\">"
-                        + "<button onclick=\"openTukarPoinDropdown('" + c.id + "',this)\" class=\"px-2.5 py-1 bg-green-600 text-white text-xs font-semibold rounded-lg hover:bg-green-700 border border-green-700 flex items-center gap-1 mx-auto\"><i class=\"ph ph-arrows-left-right text-sm\"></i> Tukar Poin <i class=\"ph ph-caret-down text-xs\"></i></button>"
+                        + "<button onclick=\"openTukarPoinDropdown('" + c.id + "')\" class=\"px-2.5 py-1 bg-green-600 text-white text-xs font-semibold rounded-lg hover:bg-green-700 border border-green-700 flex items-center gap-1 mx-auto\"><i class=\"ph ph-arrows-left-right text-sm\"></i> Tukar Poin</button>"
                         + "</td></tr>";
                 });
             }
@@ -4619,7 +4657,16 @@
                 + "<div class=\"bg-white rounded-xl shadow-sm border border-gray-100 p-4\">"
                 + "<h3 class=\"font-semibold text-gray-800 mb-1 flex items-center gap-2 text-sm\"><i class=\"ph ph-gift text-purple-600 text-base\"></i> Daftar Reward</h3>"
                 + "<p class=\"text-xs text-gray-400 mb-2\">Buat reward yang bisa ditukar member menggunakan poin aktif mereka.</p>"
-                + "<div class=\"relative mb-2\"><input type=\"text\" id=\"reward-search-input\" placeholder=\"Cari nama reward...\" value=\"" + (state.rewardSearch||'') + "\" oninput=\"handleRewardSearch(event)\" class=\"w-full pl-7 pr-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-1 focus:ring-purple-400 focus:outline-none\" /><i class=\"ph ph-magnifying-glass absolute left-2 top-2 text-gray-400 text-xs\"></i></div>"
+                + "<div class=\"flex gap-2 mb-2\">"
+                + "<div class=\"relative flex-1\"><input type=\"text\" id=\"reward-search-input\" placeholder=\"Cari nama reward...\" value=\"" + (state.rewardSearch||'') + "\" oninput=\"handleRewardSearch(event)\" class=\"w-full pl-7 pr-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-1 focus:ring-purple-400 focus:outline-none\" /><i class=\"ph ph-magnifying-glass absolute left-2 top-2 text-gray-400 text-xs\"></i></div>"
+                + "<select onchange=\"state.rewardSort=this.value; state.rewardListPage=1; renderRewardListOnly()\" class=\"border border-gray-200 rounded-lg text-xs px-2 py-1.5 text-gray-600 focus:ring-1 focus:ring-purple-400 focus:outline-none bg-white cursor-pointer shrink-0\">"
+                + "<option value=\"default\"" + (state.rewardSort==='default'?' selected':'') + ">Urutan default</option>"
+                + "<option value=\"name_asc\"" + (state.rewardSort==='name_asc'?' selected':'') + ">Nama A \u2192 Z</option>"
+                + "<option value=\"name_desc\"" + (state.rewardSort==='name_desc'?' selected':'') + ">Nama Z \u2192 A</option>"
+                + "<option value=\"poin_asc\"" + (state.rewardSort==='poin_asc'?' selected':'') + ">Poin terendah</option>"
+                + "<option value=\"poin_desc\"" + (state.rewardSort==='poin_desc'?' selected':'') + ">Poin terbanyak</option>"
+                + "</select>"
+                + "</div>"
                 + "<div id=\"reward-list-container\" class=\"space-y-1.5 mb-2\">" + rewardRows + "</div>" + rwdPagination
                 + "<form onsubmit=\"saveRewardItem(event)\" class=\"border-t border-gray-100 pt-3 mt-2 space-y-2\">"
                 + "<p class=\"text-xs font-semibold text-gray-600 mb-2\">Tambah Reward Baru</p>"
@@ -4675,6 +4722,16 @@
             var filtered = rewardData.rewardList.filter(function(r) {
                 return !q || r.name.toLowerCase().includes(q) || (r.deskripsi && r.deskripsi.toLowerCase().includes(q));
             });
+            var sortKey = state.rewardSort || 'default';
+            if (sortKey !== 'default') {
+                filtered = filtered.slice().sort(function(a, b) {
+                    if (sortKey === 'name_asc')  return a.name.localeCompare(b.name, 'id');
+                    if (sortKey === 'name_desc') return b.name.localeCompare(a.name, 'id');
+                    if (sortKey === 'poin_asc')  return (a.poinDibutuhkan||0) - (b.poinDibutuhkan||0);
+                    if (sortKey === 'poin_desc') return (b.poinDibutuhkan||0) - (a.poinDibutuhkan||0);
+                    return 0;
+                });
+            }
 
             var rwdPP = 5;
             var rwdTotal = Math.max(1, Math.ceil(filtered.length / rwdPP));
@@ -4776,7 +4833,7 @@
                             + '<div class="w-full bg-gray-200 rounded-full h-1.5 mt-1"><div class="bg-green-500 h-1.5 rounded-full" style="width:' + pct + '%"></div></div>' + progText + '</td>'
                             + '<td class="py-3 px-4 text-center text-sm text-gray-600">' + formatRp(c.totalBelanja||0) + '</td>'
                             + '<td class="py-3 px-4 text-center">'
-                            + '<button onclick="openTukarPoinDropdown(\'' + c.id + '\',this)" class="px-2.5 py-1 bg-green-600 text-white text-xs font-semibold rounded-lg hover:bg-green-700 border border-green-700 flex items-center gap-1 mx-auto"><i class="ph ph-arrows-left-right text-sm"></i> Tukar Poin <i class="ph ph-caret-down text-xs"></i></button>'
+                            + '<button onclick="openTukarPoinDropdown(\'' + c.id + '\')" class="px-2.5 py-1 bg-green-600 text-white text-xs font-semibold rounded-lg hover:bg-green-700 border border-green-700 flex items-center gap-1 mx-auto"><i class="ph ph-arrows-left-right text-sm"></i> Tukar Poin</button>'
                             + '</td></tr>';
                     }).join('');
                 }
@@ -7624,14 +7681,27 @@
                 return h.nama.toLowerCase().includes(q) || h.keterangan.toLowerCase().includes(q);
             });
 
-            // Sort: belum & cicilan dulu, lalu lunas; dalam grup sort by jatuh tempo
-            list.sort(function(a,b){
-                var order = {belum:0, cicilan:1, lunas:2};
-                var ao = order[a.status]||0, bo = order[b.status]||0;
-                if (ao !== bo) return ao - bo;
-                if (a.jatuhTempo && b.jatuhTempo) return new Date(a.jatuhTempo) - new Date(b.jatuhTempo);
-                return 0;
-            });
+            // Sort
+            var hutangSort = state.hutangSort || 'default';
+            if (hutangSort === 'default') {
+                list.sort(function(a,b){
+                    var order = {belum:0, cicilan:1, lunas:2};
+                    var ao = order[a.status]||0, bo = order[b.status]||0;
+                    if (ao !== bo) return ao - bo;
+                    if (a.jatuhTempo && b.jatuhTempo) return new Date(a.jatuhTempo) - new Date(b.jatuhTempo);
+                    return 0;
+                });
+            } else {
+                list.sort(function(a,b){
+                    if (hutangSort === 'nama_asc')   return a.nama.localeCompare(b.nama, 'id');
+                    if (hutangSort === 'nama_desc')  return b.nama.localeCompare(a.nama, 'id');
+                    if (hutangSort === 'total_asc')  return a.jumlah - b.jumlah;
+                    if (hutangSort === 'total_desc') return b.jumlah - a.jumlah;
+                    if (hutangSort === 'sisa_asc')   return (a.jumlah-a.sudahDibayar) - (b.jumlah-b.sudahDibayar);
+                    if (hutangSort === 'sisa_desc')  return (b.jumlah-b.sudahDibayar) - (a.jumlah-a.sudahDibayar);
+                    return 0;
+                });
+            }
 
             // Pagination
             var perPage = 10;
@@ -7773,8 +7843,18 @@
                 + '</div>'
                 // Search + Filter bar
                 + '<div style="padding:10px 16px;border-bottom:1px solid #f0f0f0;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">'
-                + '<div style="position:relative;flex:1;min-width:200px;"><i class="ph ph-magnifying-glass" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:#9ca3af;font-size:14px;"></i>'
+                + '<div style="position:relative;flex:1;min-width:160px;"><i class="ph ph-magnifying-glass" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:#9ca3af;font-size:14px;"></i>'
                 + '<input type="text" value="'+(state.hutangSearch||'')+'" oninput="state.hutangSearch=this.value;state.hutangPage=1;renderContent();" placeholder="Cari nama / keterangan..." style="width:100%;box-sizing:border-box;padding:7px 10px 7px 30px;border:1px solid #e5e7eb;border-radius:7px;font-size:12px;outline:none;"></div>'
+                + '<select onchange="state.hutangSort=this.value;state.hutangPage=1;renderContent();" style="padding:7px 10px;border:1px solid #e5e7eb;border-radius:7px;font-size:12px;color:#374151;background:#fff;cursor:pointer;outline:none;">'
+                + '<option value="default"'+(hutangSort==='default'?' selected':'')+'>Urutan default</option>'
+                + '<option value="nama_asc"'+(hutangSort==='nama_asc'?' selected':'')+'>Nama A \u2192 Z</option>'
+                + '<option value="nama_desc"'+(hutangSort==='nama_desc'?' selected':'')+'>Nama Z \u2192 A</option>'
+                + '<option value="total_asc"'+(hutangSort==='total_asc'?' selected':'')+'>Total hutang terkecil</option>'
+                + '<option value="total_desc"'+(hutangSort==='total_desc'?' selected':'')+'>Total hutang terbesar</option>'
+                + '<option value="sisa_asc"'+(hutangSort==='sisa_asc'?' selected':'')+'>Sisa hutang terkecil</option>'
+                + '<option value="sisa_desc"'+(hutangSort==='sisa_desc'?' selected':'')+'>Sisa hutang terbesar</option>'
+                + '</select>'
+                + (tab === 'supplier' ? '<button onclick="downloadHutangSupplierPDF()" style="display:flex;align-items:center;gap:5px;padding:7px 12px;background:#2563eb;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;"><i class="ph ph-file-pdf text-sm"></i> Unduh PDF</button>' : '')
                 + '<div style="display:flex;gap:5px;flex-wrap:wrap;">'+filterHtml+'</div>'
                 + '</div>'
                 // Table
@@ -7794,6 +7874,219 @@
                 + '</table></div>'
                 + paginationHtml
                 + '</div></div>';
+        }
+
+        }
+
+        // ── UNDUH PDF SEMUA SUPPLIER ──────────────────────────────────
+        function downloadHutangSupplierPDF() {
+            var suppliers = hutangPiutangList.filter(function(h){ return h.tipe === 'supplier'; });
+            if (suppliers.length === 0) {
+                showAlert('Tidak Ada Data', 'Belum ada data hutang supplier.', 'info');
+                return;
+            }
+
+            // Sort sesuai state aktif
+            var sortKey = state.hutangSort || 'default';
+            if (sortKey === 'default') {
+                suppliers.sort(function(a,b){
+                    var order = {belum:0, cicilan:1, lunas:2};
+                    var ao = order[a.status]||0, bo = order[b.status]||0;
+                    if (ao !== bo) return ao - bo;
+                    if (a.jatuhTempo && b.jatuhTempo) return new Date(a.jatuhTempo) - new Date(b.jatuhTempo);
+                    return 0;
+                });
+            } else {
+                suppliers.sort(function(a,b){
+                    if (sortKey === 'nama_asc')   return a.nama.localeCompare(b.nama, 'id');
+                    if (sortKey === 'nama_desc')  return b.nama.localeCompare(a.nama, 'id');
+                    if (sortKey === 'total_asc')  return a.jumlah - b.jumlah;
+                    if (sortKey === 'total_desc') return b.jumlah - a.jumlah;
+                    if (sortKey === 'sisa_asc')   return (a.jumlah-a.sudahDibayar) - (b.jumlah-b.sudahDibayar);
+                    if (sortKey === 'sisa_desc')  return (b.jumlah-b.sudahDibayar) - (a.jumlah-a.sudahDibayar);
+                    return 0;
+                });
+            }
+
+            var { jsPDF } = window.jspdf;
+            var doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+            var namaToko = (typeof pengaturan !== 'undefined' && pengaturan.nama_toko) ? pengaturan.nama_toko : 'Z-TRONIK';
+            var now = new Date();
+            var tglCetak = now.toLocaleDateString('id-ID', { day:'2-digit', month:'long', year:'numeric' });
+            var w = doc.internal.pageSize.getWidth();
+            var margin = 14;
+
+            // ── Header ──
+            doc.setFillColor(37, 99, 235);
+            doc.rect(0, 0, w, 28, 'F');
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(15);
+            doc.setFont('helvetica', 'bold');
+            doc.text('LAPORAN HUTANG SUPPLIER', margin, 11);
+            doc.setFontSize(9);
+            doc.setFont('helvetica', 'normal');
+            doc.text(namaToko, margin, 18);
+            doc.text('Dicetak: ' + tglCetak, w - margin, 18, { align: 'right' });
+
+            // ── Summary bar ──
+            var totalHutang = suppliers.reduce(function(s,h){ return s+h.jumlah; }, 0);
+            var totalBayar  = suppliers.reduce(function(s,h){ return s+h.sudahDibayar; }, 0);
+            var totalSisa   = totalHutang - totalBayar;
+            var jumlahAktif = suppliers.filter(function(h){ return h.status !== 'lunas'; }).length;
+
+            doc.setFillColor(239, 246, 255);
+            doc.rect(0, 28, w, 18, 'F');
+            doc.setTextColor(37, 99, 235);
+            doc.setFontSize(8);
+            doc.setFont('helvetica', 'bold');
+            var summaryItems = [
+                { label: 'Total Supplier', val: suppliers.length + ' supplier' },
+                { label: 'Total Hutang',   val: formatRp(totalHutang) },
+                { label: 'Sudah Dibayar',  val: formatRp(totalBayar) },
+                { label: 'Sisa Hutang',    val: formatRp(totalSisa) },
+                { label: 'Aktif',          val: jumlahAktif + ' aktif' }
+            ];
+            var colW = (w - margin*2) / summaryItems.length;
+            summaryItems.forEach(function(item, i) {
+                var x = margin + i * colW;
+                doc.setFont('helvetica', 'normal');
+                doc.setTextColor(100, 116, 139);
+                doc.text(item.label, x, 34);
+                doc.setFont('helvetica', 'bold');
+                doc.setTextColor(30, 64, 175);
+                doc.text(item.val, x, 40);
+            });
+
+            // ── Table ──
+            var startY = 50;
+            var cols = [
+                { header: 'No',          width: 8,  align: 'center' },
+                { header: 'Nama Supplier', width: 38, align: 'left' },
+                { header: 'Keterangan',  width: 44, align: 'left' },
+                { header: 'Total Hutang', width: 28, align: 'right' },
+                { header: 'Sudah Bayar', width: 28, align: 'right' },
+                { header: 'Sisa',        width: 24, align: 'right' },
+                { header: 'Status',      width: 18, align: 'center' }
+            ];
+
+            // Header row
+            doc.setFillColor(37, 99, 235);
+            doc.rect(margin, startY, w - margin*2, 7, 'F');
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(7.5);
+            doc.setFont('helvetica', 'bold');
+            var cx = margin;
+            cols.forEach(function(col) {
+                var tx = col.align === 'right' ? cx + col.width - 1 : (col.align === 'center' ? cx + col.width/2 : cx + 1);
+                doc.text(col.header, tx, startY + 4.8, { align: col.align });
+                cx += col.width;
+            });
+
+            var y = startY + 7;
+            var today = new Date(); today.setHours(0,0,0,0);
+
+            suppliers.forEach(function(h, idx) {
+                var sisa = h.jumlah - h.sudahDibayar;
+                var isOverdue = h.status !== 'lunas' && h.jatuhTempo && (new Date(h.jatuhTempo) <= today);
+                var rowH = 8;
+
+                // Zebra + overdue tint
+                if (isOverdue && h.status !== 'lunas') {
+                    doc.setFillColor(255, 245, 245);
+                } else if (idx % 2 === 0) {
+                    doc.setFillColor(255, 255, 255);
+                } else {
+                    doc.setFillColor(248, 250, 252);
+                }
+                doc.rect(margin, y, w - margin*2, rowH, 'F');
+
+                // Light border bottom
+                doc.setDrawColor(240, 240, 240);
+                doc.line(margin, y + rowH, w - margin, y + rowH);
+
+                doc.setFontSize(7.5);
+                doc.setFont('helvetica', 'normal');
+                doc.setTextColor(31, 41, 55);
+
+                var statusLabel = h.status === 'lunas' ? 'Lunas' : (h.status === 'cicilan' ? 'Cicilan' : (isOverdue ? 'Jatuh Tempo' : 'Belum'));
+                var cells = [
+                    { val: String(idx+1),           align: 'center' },
+                    { val: h.nama,                  align: 'left',   maxW: 36 },
+                    { val: (h.keterangan||'-'),     align: 'left',   maxW: 42 },
+                    { val: formatRp(h.jumlah),      align: 'right',  color: [31,41,55] },
+                    { val: formatRp(h.sudahDibayar), align: 'right', color: [22,163,74] },
+                    { val: formatRp(sisa),           align: 'right',  color: sisa > 0 ? [220,38,38] : [22,163,74] },
+                    { val: statusLabel,              align: 'center', color: h.status==='lunas'?[22,163,74]:(isOverdue?[220,38,38]:[217,119,6]) }
+                ];
+
+                cx = margin;
+                cells.forEach(function(cell, ci) {
+                    var col = cols[ci];
+                    if (cell.color) doc.setTextColor(cell.color[0], cell.color[1], cell.color[2]);
+                    else doc.setTextColor(31, 41, 55);
+                    var tx = col.align === 'right' ? cx + col.width - 1 : (col.align === 'center' ? cx + col.width/2 : cx + 1);
+                    var val = cell.maxW ? doc.splitTextToSize(String(cell.val), cell.maxW)[0] : String(cell.val);
+                    doc.text(val, tx, y + 5.2, { align: col.align });
+                    cx += col.width;
+                });
+
+                // Jatuh tempo sub-row
+                if (h.jatuhTempo) {
+                    doc.setFontSize(6.5);
+                    doc.setTextColor(150, 150, 150);
+                    doc.text('JT: ' + h.jatuhTempo, margin + cols[0].width + 1, y + rowH - 1.2);
+                }
+
+                y += rowH;
+
+                // New page if needed
+                if (y > 270) {
+                    doc.addPage();
+                    y = 14;
+                    // Repeat header
+                    doc.setFillColor(37, 99, 235);
+                    doc.rect(margin, y, w - margin*2, 7, 'F');
+                    doc.setTextColor(255, 255, 255);
+                    doc.setFontSize(7.5);
+                    doc.setFont('helvetica', 'bold');
+                    var cx2 = margin;
+                    cols.forEach(function(col) {
+                        var tx2 = col.align === 'right' ? cx2 + col.width - 1 : (col.align === 'center' ? cx2 + col.width/2 : cx2 + 1);
+                        doc.text(col.header, tx2, y + 4.8, { align: col.align });
+                        cx2 += col.width;
+                    });
+                    y += 7;
+                }
+            });
+
+            // ── Footer total ──
+            doc.setFillColor(37, 99, 235);
+            doc.rect(margin, y, w - margin*2, 8, 'F');
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(8);
+            doc.setFont('helvetica', 'bold');
+            var totCx = margin;
+            [cols[0].width + cols[1].width + cols[2].width, cols[3].width, cols[4].width, cols[5].width, cols[6].width].forEach(function(cw, i) {
+                if (i === 0) { doc.text('TOTAL (' + suppliers.length + ' supplier)', totCx + 1, y + 5.2); }
+                else if (i === 1) { doc.text(formatRp(totalHutang), totCx + cw - 1, y + 5.2, { align:'right' }); }
+                else if (i === 2) { doc.text(formatRp(totalBayar),  totCx + cw - 1, y + 5.2, { align:'right' }); }
+                else if (i === 3) { doc.text(formatRp(totalSisa),   totCx + cw - 1, y + 5.2, { align:'right' }); }
+                totCx += cw;
+            });
+
+            // ── Page numbers ──
+            var pageCount = doc.internal.getNumberOfPages();
+            for (var p = 1; p <= pageCount; p++) {
+                doc.setPage(p);
+                doc.setFontSize(7);
+                doc.setFont('helvetica', 'normal');
+                doc.setTextColor(156, 163, 175);
+                doc.text('Hal ' + p + ' dari ' + pageCount, w - margin, 292, { align:'right' });
+                doc.text(namaToko + ' — Laporan Hutang Supplier', margin, 292);
+            }
+
+            var fileName = 'Hutang_Supplier_' + namaToko.replace(/\s/g,'_') + '_' + now.toISOString().slice(0,10) + '.pdf';
+            doc.save(fileName);
         }
 
         // ── MODAL TAMBAH HUTANG ────────────────────────────
