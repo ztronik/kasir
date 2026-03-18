@@ -111,7 +111,7 @@
                 <button onclick="doLogin()" class="w-full py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl transition-colors text-base flex items-center justify-center gap-2 shadow-md">
                     <i class="ph ph-sign-in text-xl"></i> Masuk
                 </button>
-                <p class="text-center text-xs text-gray-400 mt-5">Z-TRONIK POS &bull; Sistem Kasir Digital</p>
+                <p class="text-center text-xs text-gray-400 mt-5">&copy; 2026 &nbsp;Z-TRONIK POS &bull; Sistem Kasir Digital</p>
             </div>
         </div>
     </div>
@@ -516,6 +516,8 @@
             produkRulePage: 1,
             custPoinPage:   1,
             custPoinSearch: '',
+            penukaranPage:  1,
+            penukaranSearch: '',
 
             // State hutang piutang
             hutangPage: 1,
@@ -712,6 +714,7 @@
                             })()
                         };
                     });
+                    if (data.penukaranPoin) rewardData.penukaranPoin = data.penukaranPoin;
                     if (data.riwayatShift)  clerekState.riwayatShift = data.riwayatShift;
                     if (data.mutasiKas)     clerekMutasiKas          = data.mutasiKas;
                     if (data.pengaturan) {
@@ -796,6 +799,8 @@
                             if (GAS_URL) gasPost({ action: 'bersihkanShiftLama', hariMaksimal: 30 }).catch(function(){});
                         }
                     })();
+                    // Bersihkan riwayat penukaran poin > 3 hari
+                    if (GAS_URL) gasPost({ action: 'bersihkanPenukaranLama', hariMaksimal: 3 }).catch(function(){});
                 } else {
                     state.isLoading = false;
                     state.fetchError = (data && data.message) || 'Status error dari server';
@@ -4129,6 +4134,7 @@
             belanjaPoinRules: [],
             produkPoinRules:  [],
             rewardList:       [],
+            penukaranPoin:    [],
             customers: []
         };
 
@@ -4272,17 +4278,36 @@
                         showAlert('Jumlah Tidak Valid', 'Masukkan antara 100 dan ' + cust.poin + ' poin.', 'error');
                         return;
                     }
-                    const rupiah = amt; // 100 poin = Rp 100
-                    cust.poin -= amt;
-                    cust.tier = getTierInfo(cust.poin).name;
-                    // Sync ke state.customers — hanya poin aktif, poinAkumulasi TIDAK berkurang
-                    const sc = state.customers.find(c => c.id === custId);
-                    if (sc) { sc.poin = cust.poin; }
-                    if (GAS_URL) {
-                        gasPost({ action: 'redeemPoin', customerId: custId, redeemedPoints: amt }).catch(()=>{});
-                    }
-                    renderContent();
-                    showAlert('Penukaran Berhasil!', amt.toLocaleString('id-ID') + ' poin ditukar = ' + formatRp(rupiah) + ' diskon untuk ' + cust.name + '.\n\nPoin akumulasi tidak berkurang.', 'success');
+                    const rupiah = amt;
+                    // ── Konfirmasi sebelum proses ──
+                    showConfirm(
+                        'Konfirmasi Penukaran Poin',
+                        '⚠️ Tindakan ini tidak dapat dibatalkan.\n\nMember: ' + cust.name +
+                        '\nPoin ditukar: ' + amt.toLocaleString('id-ID') + ' poin' +
+                        '\nNilai diskon: ' + formatRp(rupiah) +
+                        '\nSisa poin: ' + (cust.poin - amt).toLocaleString('id-ID') + ' poin' +
+                        '\n\nLanjutkan penukaran?',
+                        'warning',
+                        () => {
+                            cust.poin -= amt;
+                            cust.tier = getTierInfo(cust.poin).name;
+                            const sc = state.customers.find(c => c.id === custId);
+                            if (sc) { sc.poin = cust.poin; }
+                            if (GAS_URL) {
+                                gasPost({
+                                    action: 'savePenukaranMember',
+                                    customerId:  custId,
+                                    namaMember:  cust.name,
+                                    jenis:       'diskon',
+                                    rewardNama:  'Diskon Tunai ' + formatRp(rupiah),
+                                    poinDipakai: amt,
+                                    sumber:      'kasir'
+                                }).catch(()=>{});
+                            }
+                            renderContent();
+                            showAlert('Penukaran Berhasil!', amt.toLocaleString('id-ID') + ' poin ditukar = ' + formatRp(rupiah) + ' diskon untuk ' + cust.name + '.\n\nPoin akumulasi tidak berkurang.', 'success');
+                        }
+                    );
                 }
             );
         }
@@ -4297,17 +4322,28 @@
                 return;
             }
             showConfirm(
-                'Tukar Reward: ' + reward.name,
-                cust.name + ' akan menukar ' + reward.poinDibutuhkan + ' poin aktif untuk mendapatkan:\n"' + reward.name + '"' + (reward.deskripsi ? '\n(' + reward.deskripsi + ')' : '') + '\n\nPoin akumulasi tidak berkurang.',
+                'Konfirmasi Tukar Reward',
+                '⚠️ Tindakan ini tidak dapat dibatalkan.\n\nMember: ' + cust.name +
+                '\nReward: ' + reward.name + (reward.deskripsi ? '\n(' + reward.deskripsi + ')' : '') +
+                '\nPoin dipakai: ' + reward.poinDibutuhkan.toLocaleString('id-ID') + ' poin' +
+                '\nSisa poin: ' + (cust.poin - reward.poinDibutuhkan).toLocaleString('id-ID') + ' poin' +
+                '\n\nPoin akumulasi tidak berkurang. Lanjutkan?',
                 'info',
                 () => {
                     cust.poin -= reward.poinDibutuhkan;
                     cust.tier  = getTierInfo(cust.poin).name;
-                    // Hanya sync poin aktif, TIDAK sentuh poinAkumulasi
                     const sc = state.customers.find(c => c.id === custId);
                     if (sc) sc.poin = cust.poin;
                     if (GAS_URL) {
-                        gasPost({ action: 'redeemPoin', customerId: custId, redeemedPoints: reward.poinDibutuhkan }).catch(()=>{});
+                        gasPost({
+                            action: 'savePenukaranMember',
+                            customerId:  custId,
+                            namaMember:  cust.name,
+                            jenis:       'reward',
+                            rewardNama:  reward.name,
+                            poinDipakai: reward.poinDibutuhkan,
+                            sumber:      'kasir'
+                        }).catch(()=>{});
                     }
                     renderContent();
                     showAlert('Reward Berhasil Ditukar!', '"' + reward.name + '" berhasil didapatkan oleh ' + cust.name + '.\nSisa poin aktif: ' + cust.poin.toLocaleString('id-ID') + ' poin.', 'success');
@@ -4655,6 +4691,74 @@
                 + "</div>"
                 + "</div></div>";
             html += "</div></div>";
+
+            // ── LAPORAN PENUKARAN POIN ──────────────────────────────────
+            var penukaranList = rewardData.penukaranPoin || [];
+            var pnkSearch = (state.penukaranSearch || '').toLowerCase().trim();
+            var pnkFiltered = penukaranList.filter(function(p) {
+                return !pnkSearch ||
+                    (p.namaMember||'').toLowerCase().includes(pnkSearch) ||
+                    (p.customerId||'').toLowerCase().includes(pnkSearch) ||
+                    (p.rewardNama||'').toLowerCase().includes(pnkSearch);
+            });
+            var pnkPP = 10, pnkTotal = Math.max(1, Math.ceil(pnkFiltered.length / pnkPP));
+            if (!state.penukaranPage) state.penukaranPage = 1;
+            if (state.penukaranPage > pnkTotal) state.penukaranPage = pnkTotal;
+            var pnkStart = (state.penukaranPage - 1) * pnkPP;
+            var pnkShown = pnkFiltered.slice(pnkStart, pnkStart + pnkPP);
+            var pnkRows = '';
+            if (pnkShown.length === 0) {
+                pnkRows = '<tr><td colspan="7" class="py-8 text-center text-gray-400 text-sm italic">Belum ada riwayat penukaran poin.</td></tr>';
+            } else {
+                pnkShown.forEach(function(p) {
+                    var tgl = p.tanggal ? p.tanggal.split(' ')[0] : '-';
+                    var waktu = p.tanggal && p.tanggal.split(' ')[1] ? p.tanggal.split(' ')[1].slice(0,5) : '';
+                    var jenisLabel = p.jenis === 'diskon'
+                        ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-blue-50 text-blue-700">💰 Diskon</span>'
+                        : '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-purple-50 text-purple-700">🎁 Reward</span>';
+                    var sumberLabel = p.sumber === 'member'
+                        ? '<span class="inline-flex items-center gap-1 text-xs text-emerald-600 font-semibold"><i class="ph ph-device-mobile"></i> Portal</span>'
+                        : '<span class="inline-flex items-center gap-1 text-xs text-gray-500 font-semibold"><i class="ph ph-cash-register"></i> Kasir</span>';
+                    pnkRows += '<tr class="border-b border-gray-50 hover:bg-gray-50 transition-colors">'
+                        + '<td class="py-2.5 px-4 text-xs text-gray-500">' + tgl + (waktu ? '<div class="text-gray-300">' + waktu + '</div>' : '') + '</td>'
+                        + '<td class="py-2.5 px-4"><div class="font-semibold text-sm text-gray-800">' + (p.namaMember||'-') + '</div><div class="text-xs text-gray-400 font-mono">' + (p.customerId||'') + '</div></td>'
+                        + '<td class="py-2.5 px-4">' + jenisLabel + '</td>'
+                        + '<td class="py-2.5 px-4 text-sm text-gray-700 max-w-[180px]"><span title="' + (p.rewardNama||'-') + '" class="block truncate">' + (p.rewardNama||'-') + '</span></td>'
+                        + '<td class="py-2.5 px-4 text-center"><span class="font-bold text-red-500 text-sm">−' + (p.poinDipakai||0).toLocaleString('id-ID') + '</span></td>'
+                        + '<td class="py-2.5 px-4 text-center"><span class="font-semibold text-green-600 text-sm">' + (p.poinSisa||0).toLocaleString('id-ID') + '</span></td>'
+                        + '<td class="py-2.5 px-4">' + sumberLabel + '</td>'
+                        + '</tr>';
+                });
+            }
+            var pnkPagination = '';
+            if (pnkTotal > 1) {
+                pnkPagination = '<div class="flex justify-between items-center px-4 py-2 border-t border-gray-100">'
+                    + '<button onclick="state.penukaranPage--;renderContent()" ' + (state.penukaranPage<=1?'disabled':'') + ' class="text-xs px-3 py-1.5 border rounded-lg hover:bg-gray-50 disabled:opacity-40">‹ Prev</button>'
+                    + '<span class="text-xs text-gray-400">Hal. ' + state.penukaranPage + ' / ' + pnkTotal + '</span>'
+                    + '<button onclick="state.penukaranPage++;renderContent()" ' + (state.penukaranPage>=pnkTotal?'disabled':'') + ' class="text-xs px-3 py-1.5 border rounded-lg hover:bg-gray-50 disabled:opacity-40">Next ›</button>'
+                    + '</div>';
+            }
+            html += '<div class="bg-white rounded-xl shadow-sm border border-gray-100 mt-5">'
+                + '<div class="p-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">'
+                + '<div><h3 class="font-semibold text-gray-800 flex items-center gap-2"><i class="ph ph-arrows-left-right text-purple-600 text-base"></i> Riwayat Penukaran Poin</h3>'
+                + '<p class="text-xs text-gray-500 mt-0.5">Semua penukaran poin — dari portal member maupun kasir. Poin member sudah berkurang otomatis.</p></div>'
+                + '<div class="flex items-center gap-2">'
+                + '<div class="relative"><input type="text" id="penukaran-search-inp" placeholder="Cari nama / ID..." value="' + (state.penukaranSearch||'') + '" oninput="state.penukaranSearch=this.value;state.penukaranPage=1;renderContent()" class="pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-1 focus:ring-purple-400 focus:outline-none w-44" /><i class="ph ph-magnifying-glass absolute left-2.5 top-2.5 text-gray-400 text-sm"></i></div>'
+                + '<span class="text-xs bg-purple-50 text-purple-600 font-semibold px-2 py-1 rounded-lg">' + pnkFiltered.length + ' data</span>'
+                + '</div></div>'
+                + '<div class="overflow-x-auto"><table class="w-full text-left border-collapse text-sm"><thead>'
+                + '<tr class="bg-gray-50 text-gray-500 text-xs border-b border-gray-200">'
+                + '<th class="py-3 px-4 font-medium">Tanggal</th>'
+                + '<th class="py-3 px-4 font-medium">Member</th>'
+                + '<th class="py-3 px-4 font-medium">Jenis</th>'
+                + '<th class="py-3 px-4 font-medium">Keterangan</th>'
+                + '<th class="py-3 px-4 font-medium text-center">Poin Dipakai</th>'
+                + '<th class="py-3 px-4 font-medium text-center">Sisa Poin</th>'
+                + '<th class="py-3 px-4 font-medium">Sumber</th>'
+                + '</tr></thead><tbody>' + pnkRows + '</tbody></table></div>'
+                + pnkPagination
+                + '</div>';
+
             return html;
         }
 
